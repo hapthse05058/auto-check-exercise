@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "AI Exercise Checker",
+  "version": "1.0",
+  "permissions": [
+    "identity",
+    "storage",
+    "scripting",
+    "tabs"
+  ],
+  "oauth2": {
+    "client_id": "159733287448-jtf963s4659vl9oh6480bh125dhc2d5p.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/documents",
+      "https://www.googleapis.com/auth/spreadsheets.readonly"
+    ]
+  },
+  "host_permissions": [
+    "https://docs.googleapis.com/*",
+    "https://sheets.googleapis.com/*",
+    "https://api.openai.com/*"
+  ],
+  "action": { "default_popup": "popup.html" }
+}
