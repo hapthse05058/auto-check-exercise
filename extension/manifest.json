@@ -18,7 +18,9 @@
   "host_permissions": [
     "https://docs.googleapis.com/*",
     "https://sheets.googleapis.com/*",
-    "https://api.openai.com/*"
+    "https://api.openai.com/*",
+    "https://oauth2.googleapis.com/*",
+    "http://localhost:3000/*"
   ],
   "action": { "default_popup": "popup.html" }
 }
