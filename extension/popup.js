@@ -1,9 +1,12 @@
+const DOC_ID = "1qcO8zJLzD9E3MGN-lYjwegx3L8TZpX2wBClnXUjG8mI"; // paste the ID from the URL
+// const TAB_ID = "t.s7ji0uyfq6g";
+const TAB_ID = "t.0";
+const domain = "http://localhost:3000";
 document.getElementById("autoCheck").onclick = async () => {
   const manifest = chrome.runtime.getManifest();
   const clientId = manifest.oauth2.client_id;
   const scopes = manifest.oauth2.scopes;
   const redirectUri = chrome.identity.getRedirectURL();
-  // const domain = "http://localhost:3000";
 
   // Helper functions for token management
   const getStoredTokens = async () => {
@@ -52,7 +55,7 @@ document.getElementById("autoCheck").onclick = async () => {
     console.log("Refreshing access token");
     try {
       const refreshResponse = await fetch(
-        `http://localhost:3000/exchange-token`,
+        `${domain}/exchange-token`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -116,7 +119,7 @@ document.getElementById("autoCheck").onclick = async () => {
 
         try {
           const tokenResponse = await fetch(
-            `http://localhost:3000/exchange-token`,
+            `${domain}/exchange-token`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -160,63 +163,111 @@ document.getElementById("autoCheck").onclick = async () => {
   // If we reach here, we have a valid access token, proceed with document fetch
   await fetchAndDisplayDocument(accessToken, redirectUri);
 };
-
-// Separate function to fetch and display the document
-async function fetchAndDisplayDocument(accessToken, redirectUri) {
-  const DOC_ID = "1qcO8zJLzD9E3MGN-lYjwegx3L8TZpX2wBClnXUjG8mI"; // paste the ID from the URL
+/**
+ * Fetches text content from a specific tab in a Google Doc using the REST API.
+ * @param {string} docId - The ID of the Google Document.
+ * @param {string} tabId - The ID of the specific tab.
+ * @param {string} accessToken - Your OAuth2 access token.
+ */
+async function getTabContent(docId, tabId, accessToken) {
+  const url = `https://docs.googleapis.com/v1/documents/${docId}?includeTabsContent=true`;
 
   try {
-    const docResponse = await fetch(
-      `https://docs.googleapis.com/v1/documents/${DOC_ID}`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
       },
-    );
+    });
 
-    if (!docResponse.ok) {
-      const txt = await docResponse.text();
-      throw new Error("Docs API error: " + docResponse.status + " " + txt);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
 
-    const doc = await docResponse.json();
+    const data = await response.json();
 
-    // Extract plain text from the document
-    const exercisePart4 = (doc.body?.content || []).flatMap(
-      (block) => block.table || [],
-    )[6].tableRows;
-    let quesAndAnsArr = [];
-    for (let i = 0; i < exercisePart4.length; i++) {
-      if (i === 0 || i === 1) continue;
-      let item = exercisePart4[i];
-      let qna = item.tableCells[0].content.map((i) => i.paragraph?.elements);
-      let qnaObj = {};
-      for (let j = 0; j < qna.length; j++) {
-        let qnaChild = qna[j];
-        if (qnaChild.length > 0) {
-          let question = qnaChild.find((qa) =>
-            startsWithNumberDot(qa.textRun.content),
-          );
-          let answer = qnaChild.find((qa) =>
-            startsWithArrow(qa.textRun.content),
-          );
-          if (question) {
-            qnaObj.question = question.textRun.content;
-          }
-          if (answer) {
-            qnaObj.answer = answer.textRun.content;
-          }
-          if (question) {
-            quesAndAnsArr.push(qnaObj);
-          }
+    // 1. Find the tab recursively
+    const targetTab = findTabById(data.tabs, tabId);
+    if (!targetTab || !targetTab.documentTab) {
+      throw new Error(`Tab with ID ${tabId} not found.`);
+    }
+
+    // 2. Parse and return the text
+
+    return targetTab;
+  } catch (error) {
+    console.error("Error fetching document:", error);
+  }
+}
+
+// Helper functions (same logic as before)
+function findTabById(tabs, id) {
+  for (const tab of tabs) {
+    if (tab.tabProperties.tabId === id) return tab;
+    if (tab.childTabs) {
+      const found = findTabById(tab.childTabs, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function getQesAndAnsFromPartIVOfTheTargetTab(targetTab) {
+  const exercisePart4 = (targetTab.documentTab.body?.content || []).flatMap(
+    (block) => block.table || [],
+  )[6].tableRows;
+  let quesAndAnsArr = [];
+  for (let i = 0; i < exercisePart4.length; i++) {
+    if (i === 0 || i === 1) continue;
+    let item = exercisePart4[i];
+    let qna = item.tableCells[0].content.map((i) => i.paragraph?.elements);
+    let qnaObj = {};
+    for (let j = 0; j < qna.length; j++) {
+      let qnaChild = qna[j];
+      if (qnaChild.length > 0) {
+        let question = qnaChild.find((qa) =>
+          startsWithNumberDot(qa.textRun.content),
+        );
+        let answer = qnaChild.find((qa) => startsWithArrow(qa.textRun.content));
+        if (question) {
+          qnaObj.question = question.textRun.content;
+        }
+        if (answer) {
+          qnaObj.answer = answer.textRun.content;
+        }
+        if (question) {
+          quesAndAnsArr.push(qnaObj);
         }
       }
     }
+  }
+
+  return quesAndAnsArr;
+}
+// Separate function to fetch and display the document
+async function fetchAndDisplayDocument(accessToken, redirectUri) {
+  try {
+    // const docResponse = await fetch(
+    //   `https://docs.googleapis.com/v1/documents/${DOC_ID}`,
+    //   {
+    //     headers: {
+    //       Authorization: `Bearer ${accessToken}`,
+    //     },
+    //   },
+    // );
+
+    // if (!docResponse.ok) {
+    //   const txt = await docResponse.text();
+    //   throw new Error("Docs API error: " + docResponse.status + " " + txt);
+    // }
+
+    const doc = await getTabContent(DOC_ID, TAB_ID, accessToken);
+    let quesAndAnsArr = getQesAndAnsFromPartIVOfTheTargetTab(doc);
 
     console.log(quesAndAnsArr);
 
-    const response = await fetch(`http://localhost:3000/grade`, {
+    const response = await fetch(`${domain}/grade`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -237,18 +288,22 @@ async function fetchAndDisplayDocument(accessToken, redirectUri) {
       let aiResponseArr = result.raw.split("\n");
       let quesAndAnsResponse = [];
       for (let i = 2; i < aiResponseArr.length - 2; i++) {
-        let row = aiResponseArr[i].substr(1, aiResponseArr[i].length - 2).trim();
-        let rowElements = row.split(' | ');
-        quesAndAnsResponse.push({quesIndex: rowElements[0], quesContent: rowElements[1], studentAnswer: rowElements[2], aiAnswer: rowElements[3]});
+        let row = aiResponseArr[i]
+          .substr(1, aiResponseArr[i].length - 2)
+          .trim();
+        let rowElements = row.split(" | ");
+        quesAndAnsResponse.push({
+          quesIndex: rowElements[0],
+          quesContent: rowElements[1],
+          studentAnswer: rowElements[2],
+          aiAnswer: rowElements[3],
+        });
       }
       console.log(quesAndAnsResponse);
       writeToGGDocFile(quesAndAnsResponse, DOC_ID, accessToken);
     } catch {
       console.log("Grade result (text):", text);
     }
-
-    // test write on ggle doc file
-    // let answer = "hong Ha writes: chua bài câu 2";
   } catch (err) {
     console.error(err);
     alert("Error fetching document: " + err.message);
@@ -260,21 +315,26 @@ async function writeToGGDocFile(quesAndAnsResponse, DOC_ID, accessToken) {
   const requests = [];
 
   for (const [index, element] of quesAndAnsResponse.entries()) {
-    // if (!containsCorrectMark(element.aiAnswer)) {
-      let result  = containsCorrectMark(element.aiAnswer) ? '' : element.aiAnswer;
-      if (index === quesAndAnsResponse.length - 1) {
-        result += "\nCác câu còn lại đúng rồi em nha! Tiếp tục giữ phong độ này nhé!💯🔥"
-      }
-      requests.push({
-        replaceAllText: {
-          containsText: {
-            text: `Đáp án câu ${element.quesIndex}`,
-            matchCase: true,
-          },
-          replaceText: result,
+    let result = containsCorrectMark(element.aiAnswer) ? "" : element.aiAnswer;
+
+    if (index === quesAndAnsResponse.length - 1) {
+      result +=
+        "\nCác câu còn lại đúng rồi em nha! Tiếp tục giữ phong độ này nhé! 💯🔥";
+    }
+
+    requests.push({
+      replaceAllText: {
+        containsText: {
+          text: `Chữa bài câu ${element.quesIndex}.`,
+          matchCase: false,
         },
-      });
-    // }
+        replaceText: result,
+        // Add this criteria to target the specific tab
+        tabsCriteria: {
+          tabIds: [TAB_ID],
+        },
+      },
+    });
   }
 
   if (requests.length === 0) {
@@ -282,6 +342,8 @@ async function writeToGGDocFile(quesAndAnsResponse, DOC_ID, accessToken) {
     alert("done");
     return;
   }
+
+  console.log(requests);
 
   const updateResponse = await fetch(
     `https://docs.googleapis.com/v1/documents/${DOC_ID}:batchUpdate`,
