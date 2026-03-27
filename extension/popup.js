@@ -2,23 +2,71 @@ const DOC_ID = "1qcO8zJLzD9E3MGN-lYjwegx3L8TZpX2wBClnXUjG8mI"; // paste the ID f
 // const TAB_ID = "t.s7ji0uyfq6g";
 const TAB_ID = "t.0";
 const domain = "http://localhost:3000";
+
+document.getElementById("processAllDocs").onclick = async () => {
+  const linkText = document.getElementById("docLinks").value;
+  const students = parseDocLinks(linkText);
+
+  if (students.length === 0) {
+    alert("Please enter at least one valid Google Doc link.");
+    return;
+  }
+
+  // Get your accessToken logic here (omitted for brevity, use your existing flow)
+  const tokens = await getStoredTokens();
+  let accessToken = tokens.accessToken;
+
+  const statusDiv = document.getElementById("status");
+
+  for (const student of students) {
+    try {
+      statusDiv.innerText = `Processing Doc: ${student.docId}...`;
+
+      // 1. Fetch content from the specific Tab
+      const doc = await getTabContent(
+        student.docId,
+        student.tabId,
+        accessToken,
+      );
+
+      // 2. Parse the table content (Part IV)
+      let quesAndAnsArr = getQesAndAnsFromPartIVOfTheTargetTab(doc);
+      console.log(quesAndAnsArr)
+
+      // 3. Send to your grading backend
+      const gradeResponse = await fetch(`${domain}/grade`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: quesAndAnsArr }),
+      });
+
+      const result = await gradeResponse.json();
+
+      // 4. Parse AI response and write back to the SPECIFIC Doc and TAB
+      let aiResponseArr = result.raw.split("\n");
+      let quesAndAnsResponse = [];
+      // ... (Your existing parsing logic for aiResponseArr) ...
+
+      // Pass the specific docId and tabId to your write function
+      // await writeToGGDocFile(
+      //   quesAndAnsResponse,
+      //   student.docId,
+      //   accessToken,
+      //   student.tabId,
+      // );
+    } catch (err) {
+      console.error(`Failed to process ${student.docId}:`, err);
+    }
+  }
+
+  statusDiv.innerText = "All documents processed successfully! ✅";
+};
+
 document.getElementById("autoCheck").onclick = async () => {
   const manifest = chrome.runtime.getManifest();
   const clientId = manifest.oauth2.client_id;
   const scopes = manifest.oauth2.scopes;
   const redirectUri = chrome.identity.getRedirectURL();
-
-  // Helper functions for token management
-  const getStoredTokens = async () => {
-    return new Promise((resolve) => {
-      chrome.storage.local.get(
-        ["accessToken", "refreshToken", "tokenExpiry"],
-        (result) => {
-          resolve(result);
-        },
-      );
-    });
-  };
 
   const setStoredTokens = async (accessToken, refreshToken, expiresIn) => {
     const expiryTime = Date.now() + expiresIn * 1000; // Convert to milliseconds
@@ -54,17 +102,14 @@ document.getElementById("autoCheck").onclick = async () => {
     // Try to refresh the token
     console.log("Refreshing access token");
     try {
-      const refreshResponse = await fetch(
-        `${domain}/exchange-token`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            refreshToken: tokens.refreshToken,
-            grantType: "refresh_token",
-          }),
-        },
-      );
+      const refreshResponse = await fetch(`${domain}/exchange-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          refreshToken: tokens.refreshToken,
+          grantType: "refresh_token",
+        }),
+      });
 
       const refreshData = await refreshResponse.json();
       if (refreshData.access_token) {
@@ -118,17 +163,14 @@ document.getElementById("autoCheck").onclick = async () => {
         }
 
         try {
-          const tokenResponse = await fetch(
-            `${domain}/exchange-token`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                code: code,
-                redirectUri: redirectUri,
-              }),
-            },
-          );
+          const tokenResponse = await fetch(`${domain}/exchange-token`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              code: code,
+              redirectUri: redirectUri,
+            }),
+          });
 
           const tokenData = await tokenResponse.json();
           if (tokenData.error) {
@@ -163,6 +205,18 @@ document.getElementById("autoCheck").onclick = async () => {
   // If we reach here, we have a valid access token, proceed with document fetch
   await fetchAndDisplayDocument(accessToken, redirectUri);
 };
+
+// Helper functions for token management
+async function getStoredTokens() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(
+      ["accessToken", "refreshToken", "tokenExpiry"],
+      (result) => {
+        resolve(result);
+      },
+    );
+  });
+}
 /**
  * Fetches text content from a specific tab in a Google Doc using the REST API.
  * @param {string} docId - The ID of the Google Document.
@@ -217,7 +271,7 @@ function getQesAndAnsFromPartIVOfTheTargetTab(targetTab) {
   const exercisePart4 = (targetTab.documentTab.body?.content || []).flatMap(
     (block) => block.table || [],
   )[6].tableRows;
-  let quesAndAnsArr = [];
+  let quesAndAnsArrPartIV = [];
   for (let i = 0; i < exercisePart4.length; i++) {
     if (i === 0 || i === 1) continue;
     let item = exercisePart4[i];
@@ -237,70 +291,67 @@ function getQesAndAnsFromPartIVOfTheTargetTab(targetTab) {
           qnaObj.answer = answer.textRun.content;
         }
         if (question) {
-          quesAndAnsArr.push(qnaObj);
+          quesAndAnsArrPartIV.push(qnaObj);
         }
       }
     }
   }
 
-  return quesAndAnsArr;
+  return quesAndAnsArrPartIV;
 }
-// Separate function to fetch and display the document
-async function fetchAndDisplayDocument(accessToken, redirectUri) {
+
+async function sendStudentExerciseToAIAgentoGetAnswer(
+  quesAndAnsArrPartIV,
+  redirectUri,
+) {
   try {
-    // const docResponse = await fetch(
-    //   `https://docs.googleapis.com/v1/documents/${DOC_ID}`,
-    //   {
-    //     headers: {
-    //       Authorization: `Bearer ${accessToken}`,
-    //     },
-    //   },
-    // );
-
-    // if (!docResponse.ok) {
-    //   const txt = await docResponse.text();
-    //   throw new Error("Docs API error: " + docResponse.status + " " + txt);
-    // }
-
-    const doc = await getTabContent(DOC_ID, TAB_ID, accessToken);
-    let quesAndAnsArr = getQesAndAnsFromPartIVOfTheTargetTab(doc);
-
-    console.log(quesAndAnsArr);
-
     const response = await fetch(`${domain}/grade`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        items: quesAndAnsArr,
+        items: quesAndAnsArrPartIV,
         redirectUri: redirectUri,
       }),
     });
-
-    const text = await response.text();
+    const text = response.text();
     if (!response.ok) {
       console.error("Grade API error", response.status, text);
       throw new Error(`Grade API error ${response.status}: ${text}`);
     }
+    return text;
+  } catch (err) {
+    console.error(err);
+    alert("Error fetching document: " + err.message);
+  }
+}
+// Separate function to fetch and display the document
+async function fetchAndDisplayDocument(accessToken, redirectUri) {
+  try {
+    const doc = await getTabContent(DOC_ID, TAB_ID, accessToken);
+    let quesAndAnsArrPartIV = getQesAndAnsFromPartIVOfTheTargetTab(doc);
+    const agentResponse = await sendStudentExerciseToAIAgentoGetAnswer(
+      quesAndAnsArrPartIV,
+      redirectUri,
+    );
 
     try {
-      const result = JSON.parse(text);
-      // result.raw.split("\n")[2].substr(1, result.raw.split("\n")[2].length - 2).trim().split(" | ")
-      let aiResponseArr = result.raw.split("\n");
-      let quesAndAnsResponse = [];
-      for (let i = 2; i < aiResponseArr.length - 2; i++) {
-        let row = aiResponseArr[i]
-          .substr(1, aiResponseArr[i].length - 2)
-          .trim();
-        let rowElements = row.split(" | ");
-        quesAndAnsResponse.push({
-          quesIndex: rowElements[0],
-          quesContent: rowElements[1],
-          studentAnswer: rowElements[2],
-          aiAnswer: rowElements[3],
-        });
-      }
-      console.log(quesAndAnsResponse);
-      writeToGGDocFile(quesAndAnsResponse, DOC_ID, accessToken);
+      // const result = JSON.parse(agentResponse);
+      // let aiResponseArr = result.raw.split("\n");
+      // let quesAndAnsResponse = [];
+      // for (let i = 2; i < aiResponseArr.length - 2; i++) {
+      //   let row = aiResponseArr[i]
+      //     .substr(1, aiResponseArr[i].length - 2)
+      //     .trim();
+      //   let rowElements = row.split(" | ");
+      //   quesAndAnsResponse.push({
+      //     quesIndex: rowElements[0],
+      //     quesContent: rowElements[1],
+      //     studentAnswer: rowElements[2],
+      //     aiAnswer: rowElements[3],
+      //   });
+      // }
+      // console.log(quesAndAnsResponse);
+      writeToGGDocFile(agentResponse, DOC_ID, accessToken);
     } catch {
       console.log("Grade result (text):", text);
     }
@@ -310,66 +361,87 @@ async function fetchAndDisplayDocument(accessToken, redirectUri) {
   }
 }
 
-async function writeToGGDocFile(quesAndAnsResponse, DOC_ID, accessToken) {
-  // Build requests array for batch update
-  const requests = [];
+async function writeToGGDocFile(agentResponse, DOC_ID, accessToken) {
+  try {
+    const result = JSON.parse(agentResponse);
+    let aiResponseArr = result.raw.split("\n");
+    let quesAndAnsResponse = [];
+    for (let i = 2; i < aiResponseArr.length - 2; i++) {
+      let row = aiResponseArr[i].substr(1, aiResponseArr[i].length - 2).trim();
+      let rowElements = row.split(" | ");
+      quesAndAnsResponse.push({
+        quesIndex: rowElements[0],
+        quesContent: rowElements[1],
+        studentAnswer: rowElements[2],
+        aiAnswer: rowElements[3],
+      });
+    }
+    console.log(quesAndAnsResponse);
+    // Build requests array for batch update
+    const requests = [];
 
-  for (const [index, element] of quesAndAnsResponse.entries()) {
-    let result = containsCorrectMark(element.aiAnswer) ? "" : element.aiAnswer;
+    for (const [index, element] of quesAndAnsResponse.entries()) {
+      let result = containsCorrectMark(element.aiAnswer)
+        ? ""
+        : element.aiAnswer;
 
-    if (index === quesAndAnsResponse.length - 1) {
-      result +=
-        "\nCác câu còn lại đúng rồi em nha! Tiếp tục giữ phong độ này nhé! 💯🔥";
+      if (index === quesAndAnsResponse.length - 1) {
+        result +=
+          "\nCác câu còn lại đúng rồi em nha! Tiếp tục giữ phong độ này nhé! 💯🔥";
+      }
+
+      requests.push({
+        replaceAllText: {
+          containsText: {
+            text: `Chữa bài câu ${element.quesIndex}.`,
+            matchCase: false,
+          },
+          replaceText: result,
+          // Add this criteria to target the specific tab
+          tabsCriteria: {
+            tabIds: [TAB_ID],
+          },
+        },
+      });
     }
 
-    requests.push({
-      replaceAllText: {
-        containsText: {
-          text: `Chữa bài câu ${element.quesIndex}.`,
-          matchCase: false,
+    if (requests.length === 0) {
+      console.log("No updates needed");
+      alert("done");
+      return;
+    }
+
+    console.log(requests);
+
+    const updateResponse = await fetch(
+      `https://docs.googleapis.com/v1/documents/${DOC_ID}:batchUpdate`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
         },
-        replaceText: result,
-        // Add this criteria to target the specific tab
-        tabsCriteria: {
-          tabIds: [TAB_ID],
-        },
+        body: JSON.stringify({
+          requests: requests,
+        }),
       },
-    });
-  }
-
-  if (requests.length === 0) {
-    console.log("No updates needed");
-    alert("done");
-    return;
-  }
-
-  console.log(requests);
-
-  const updateResponse = await fetch(
-    `https://docs.googleapis.com/v1/documents/${DOC_ID}:batchUpdate`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        requests: requests,
-      }),
-    },
-  );
-
-  if (!updateResponse.ok) {
-    const updateText = await updateResponse.text();
-    console.error("Update error:", updateResponse.status, updateText);
-    throw new Error(
-      "Failed to update document: " + updateResponse.status + " " + updateText,
     );
-  }
 
-  console.log("Document updated successfully");
+    if (!updateResponse.ok) {
+      const updateText = await updateResponse.text();
+      console.error("Update error:", updateResponse.status, updateText);
+      throw new Error(
+        "Failed to update document: " +
+          updateResponse.status +
+          " " +
+          updateText,
+      );
+    }
 
-  alert("done");
+    console.log("Document updated successfully");
+
+    alert("done");
+  } catch (err) {}
 }
 
 function startsWithNumberDot(sentence) {
@@ -382,6 +454,27 @@ function startsWithArrow(sentence) {
 
 function containsCorrectMark(str) {
   return str.includes("✅ Đúng");
+}
+
+function parseDocLinks(text) {
+  const lines = text.split("\n").filter((line) => line.trim() !== "");
+  const docObjects = [];
+
+  lines.forEach((link) => {
+    // Regex to find the ID between /d/ and /edit
+    const docIdMatch = link.match(/\/d\/(.+?)\//);
+    // Regex to find the tab ID after tab=
+    const tabIdMatch = link.match(/tab=(.+?)(&|$)/);
+
+    if (docIdMatch) {
+      docObjects.push({
+        docId: docIdMatch[1],
+        tabId: tabIdMatch[1] || "t.0", // Default to first tab if not found
+      });
+    }
+  });
+
+  return docObjects;
 }
 
 // Optional: Add a logout button functionality
