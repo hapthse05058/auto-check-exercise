@@ -61,7 +61,7 @@ document.getElementById("processAllDocs").onclick = async () => {
   statusDiv.innerText = "All documents processed successfully! ✅";
 };
 
-document.getElementById("autoCheck").onclick = async () => {
+document.getElementById("loginBtn").onclick = async () => {
   const manifest = chrome.runtime.getManifest();
   const clientId = manifest.oauth2.client_id;
   const scopes = manifest.oauth2.scopes;
@@ -184,7 +184,7 @@ document.getElementById("autoCheck").onclick = async () => {
             tokenData.expires_in || 3600,
           );
           // Now proceed with the document fetch
-          await fetchAndDisplayDocument(accessToken, redirectUri);
+          // await fetchAndDisplayDocument(accessToken, redirectUri);
         } catch (err) {
           console.error(err);
           alert("Error during token exchange: " + err.message);
@@ -195,7 +195,7 @@ document.getElementById("autoCheck").onclick = async () => {
   }
 
   // If we reach here, we have a valid access token, proceed with document fetch
-  await fetchAndDisplayDocument(accessToken, redirectUri);
+  // await fetchAndDisplayDocument(accessToken, redirectUri);
 };
 
 // Helper functions for token management
@@ -431,33 +431,6 @@ function getQesAndAnsFromPartIVOfTheTargetTab(targetTab) {
   } else {
     quesAndAnsArrPartIV = getQuesAndAnsForNormalLession(exercisePart4);
   }
-  // for (let i = 0; i < exercisePart4.length; i++) {
-  //   if (![0, 1].includes(i)) {
-  //     let item = exercisePart4[i];
-  //     let qna = item.tableCells[0].content.map((i) => i.paragraph?.elements);
-  //     let qnaObj = {};
-  //     for (let j = 0; j < qna.length; j++) {
-  //       let qnaChild = qna[j];
-  //       if (qnaChild.length > 0) {
-  //         let question = qnaChild.find((qa) =>
-  //           startsWithNumberDot(qa.textRun.content),
-  //         );
-  //         let answer = qnaChild.find((qa) =>
-  //           startsWithArrow(qa.textRun.content),
-  //         );
-  //         if (question) {
-  //           qnaObj.question = question.textRun.content;
-  //         }
-  //         if (answer) {
-  //           qnaObj.answer = answer.textRun.content;
-  //         }
-  //         if (question) {
-  //           quesAndAnsArrPartIV.push(qnaObj);
-  //         }
-  //       }
-  //     }
-  //   }
-  // }
 
   console.log(quesAndAnsArrPartIV);
   return quesAndAnsArrPartIV;
@@ -478,49 +451,47 @@ async function sendStudentExerciseToAIAgentoGetAnswer(
     });
     const text = response.text();
     if (!response.ok) {
-      console.error("Grade API error", response.status, text);
       throw new Error(`Grade API error ${response.status}: ${text}`);
     }
     return text;
   } catch (err) {
-    console.error(err);
     alert("Error fetching document: " + err.message);
   }
 }
 // Separate function to fetch and display the document
-async function fetchAndDisplayDocument(accessToken, redirectUri) {
-  try {
-    const doc = await getTabContent(DOC_ID, TAB_ID, accessToken);
-    let quesAndAnsArrPartIV = getQesAndAnsFromPartIVOfTheTargetTab(doc);
-    if (quesAndAnsArrPartIV) {
-      // const agentResponse = await sendStudentExerciseToAIAgentoGetAnswer(
-      //   quesAndAnsArrPartIV,
-      //   redirectUri,
-      // );
-      try {
-        // const result = JSON.parse(agentResponse);
-        // let aiResponseArr = result.raw.split("\n");
-        // let quesAndAnsResponse = [];
-        // for (let i = 2; i < aiResponseArr.length - 2; i++) {
-        //   let row = aiResponseArr[i]
-        //     .substr(1, aiResponseArr[i].length - 2)
-        //     .trim();
-        //   let rowElements = row.split(" | ");
-        //   quesAndAnsResponse.push({
-        //     quesIndex: rowElements[0],
-        //     quesContent: rowElements[1],
-        //     studentAnswer: rowElements[2],
-        //     aiAnswer: rowElements[3],
-        //   });
-        // }
-        // writeToGGDocFile(agentResponse, DOC_ID, accessToken);
-      } catch {}
-    }
-  } catch (err) {
-    console.error(err);
-    alert("Error fetching document: " + err.message);
-  }
-}
+// async function fetchAndDisplayDocument(accessToken, redirectUri) {
+//   try {
+//     const doc = await getTabContent(DOC_ID, TAB_ID, accessToken);
+//     let quesAndAnsArrPartIV = getQesAndAnsFromPartIVOfTheTargetTab(doc);
+//     if (quesAndAnsArrPartIV) {
+//       // const agentResponse = await sendStudentExerciseToAIAgentoGetAnswer(
+//       //   quesAndAnsArrPartIV,
+//       //   redirectUri,
+//       // );
+//       try {
+//         // const result = JSON.parse(agentResponse);
+//         // let aiResponseArr = result.raw.split("\n");
+//         // let quesAndAnsResponse = [];
+//         // for (let i = 2; i < aiResponseArr.length - 2; i++) {
+//         //   let row = aiResponseArr[i]
+//         //     .substr(1, aiResponseArr[i].length - 2)
+//         //     .trim();
+//         //   let rowElements = row.split(" | ");
+//         //   quesAndAnsResponse.push({
+//         //     quesIndex: rowElements[0],
+//         //     quesContent: rowElements[1],
+//         //     studentAnswer: rowElements[2],
+//         //     aiAnswer: rowElements[3],
+//         //   });
+//         // }
+//         // writeToGGDocFile(agentResponse, DOC_ID, accessToken);
+//       } catch {}
+//     }
+//   } catch (err) {
+//     console.error(err);
+//     alert("Error fetching document: " + err.message);
+//   }
+// }
 
 async function writeToGGDocFile(agentResponse, DOC_ID, accessToken) {
   try {
