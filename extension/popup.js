@@ -1,214 +1,36 @@
-const DOC_ID = "1qcO8zJLzD9E3MGN-lYjwegx3L8TZpX2wBClnXUjG8mI"; // paste the ID from the URL
-// const TAB_ID = "t.s7ji0uyfq6g";
+﻿const DOC_ID = "1qcO8zJLzD9E3MGN-lYjwegx3L8TZpX2wBClnXUjG8mI";
 const TAB_ID = "t.0";
-const domain = "http://localhost:3000";
 
-document.getElementById("processAllDocs").onclick = async () => {
-  const linkText = document.getElementById("docLinks").value;
-  const students = parseDocLinks(linkText);
+const statusDiv = () => document.getElementById("status");
 
-  if (students.length === 0) {
-    alert("Please enter at least one valid Google Doc link.");
-    return;
-  }
+const DOMAIN_BE = "http://localhost:3000";
 
-  // Get your accessToken logic here (omitted for brevity, use your existing flow)
-  const tokens = await getStoredTokens();
-  let accessToken = tokens.accessToken;
-
-  const statusDiv = document.getElementById("status");
-
-  for (const student of students) {
-    try {
-      statusDiv.innerText = `Processing Doc: ${student.docId}...`;
-
-      // 1. Fetch content from the specific Tab
-      const doc = await getTabContent(
-        student.docId,
-        student.tabId,
-        accessToken,
-      );
-      if (!doc) continue;
-      // 2. Parse the table content (Part IV)
-      let quesAndAnsArr = getQesAndAnsFromPartIVOfTheTargetTab(doc);
-
-      // 3. Send to your grading backend
-      // const gradeResponse = await fetch(`${domain}/grade`, {
-      //   method: "POST",
-      //   headers: { "Content-Type": "application/json" },
-      //   body: JSON.stringify({ items: quesAndAnsArr }),
-      // });
-
-      // const result = await gradeResponse.json();
-
-      // // 4. Parse AI response and write back to the SPECIFIC Doc and TAB
-      // let aiResponseArr = result.raw.split("\n");
-      // let quesAndAnsResponse = [];
-      // ... (Your existing parsing logic for aiResponseArr) ...
-
-      // Pass the specific docId and tabId to your write function
-      // await writeToGGDocFile(
-      //   quesAndAnsResponse,
-      //   student.docId,
-      //   accessToken,
-      //   student.tabId,
-      // );
-    } catch (err) {
-      console.error(`Failed to process ${student.docId}:`, err);
+function parseDocLinks(text) {
+  const links = [];
+  const lines = text.split("\n");
+  lines.forEach((line) => {
+    const match = line.match(/\/document\/d\/([a-zA-Z0-9-_]+)/);
+    if (match) {
+      links.push({ docId: match[1], tabId: "t.0" });
     }
-  }
+  });
+  return links;
+}
 
-  statusDiv.innerText = "All documents processed successfully! ✅";
-};
-
-document.getElementById("loginBtn").onclick = async () => {
-  const manifest = chrome.runtime.getManifest();
-  const clientId = manifest.oauth2.client_id;
-  const scopes = manifest.oauth2.scopes;
-  const redirectUri = chrome.identity.getRedirectURL();
-
-  const setStoredTokens = async (accessToken, refreshToken, expiresIn) => {
-    const expiryTime = Date.now() + expiresIn * 1000; // Convert to milliseconds
-    return new Promise((resolve) => {
-      chrome.storage.local.set(
-        {
-          accessToken,
-          refreshToken,
-          tokenExpiry: expiryTime,
-        },
-        resolve,
-      );
-    });
-  };
-
-  const clearStoredTokens = async () => {
-    return new Promise((resolve) => {
-      chrome.storage.local.remove(
-        ["accessToken", "refreshToken", "tokenExpiry"],
-        resolve,
-      );
-    });
-  };
-
-  // Check if we have a valid access token
-  const tokens = await getStoredTokens();
-  let accessToken = tokens.accessToken;
-
-  if (accessToken && tokens.tokenExpiry && Date.now() < tokens.tokenExpiry) {
-    // We have a valid token, use it directly
-  } else if (tokens.refreshToken) {
-    // Try to refresh the token
-    try {
-      const refreshResponse = await fetch(`${domain}/exchange-token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          refreshToken: tokens.refreshToken,
-          grantType: "refresh_token",
-        }),
-      });
-
-      const refreshData = await refreshResponse.json();
-      if (refreshData.access_token) {
-        accessToken = refreshData.access_token;
-        await setStoredTokens(
-          refreshData.access_token,
-          tokens.refreshToken,
-          refreshData.expires_in || 3600,
-        );
-      } else {
-        await clearStoredTokens();
-      }
-    } catch (err) {
-      console.error("Token refresh error:", err);
-      await clearStoredTokens();
-    }
-  }
-
-  // If we still don't have a token, do the full OAuth flow
-  if (!accessToken) {
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&response_type=code&scope=${encodeURIComponent(scopes.join(" "))}&redirect_uri=${encodeURIComponent(redirectUri)}&access_type=offline&prompt=consent&include_granted_scopes=true`;
-
-    chrome.identity.launchWebAuthFlow(
-      {
-        url: authUrl,
-        interactive: true,
-      },
-      async (redirectUrl) => {
-        if (chrome.runtime.lastError) {
-          console.error("Auth error", chrome.runtime.lastError);
-          alert("Authentication error: " + chrome.runtime.lastError.message);
-          return;
-        }
-
-        if (!redirectUrl) {
-          alert("Failed to obtain auth token.");
-          return;
-        }
-
-        const url = new URL(redirectUrl);
-        const code = url.searchParams.get("code");
-        if (!code) {
-          console.error("Auth response URL (no code):", redirectUrl);
-          alert(
-            "Authorization failed (no code returned). Check console for the full redirect URL.",
-          );
-          return;
-        }
-
-        try {
-          const tokenResponse = await fetch(`${domain}/exchange-token`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              code: code,
-              redirectUri: redirectUri,
-            }),
-          });
-
-          const tokenData = await tokenResponse.json();
-          if (tokenData.error) {
-            console.error("Token exchange error:", tokenData);
-            alert(
-              "Token exchange failed: " +
-                tokenData.error +
-                "\n\nMake sure your backend is running and GOOGLE_CLIENT_SECRET is set in .env",
-            );
-            return;
-          }
-
-          accessToken = tokenData.access_token;
-          await setStoredTokens(
-            tokenData.access_token,
-            tokenData.refresh_token,
-            tokenData.expires_in || 3600,
-          );
-          // Now proceed with the document fetch
-          // await fetchAndDisplayDocument(accessToken, redirectUri);
-        } catch (err) {
-          console.error(err);
-          alert("Error during token exchange: " + err.message);
-        }
-      },
-    );
-    return; // Exit here, the document fetch will happen in the callback
-  }
-
-  // If we reach here, we have a valid access token, proceed with document fetch
-  // await fetchAndDisplayDocument(accessToken, redirectUri);
-};
-
-// Helper functions for token management
-async function getStoredTokens() {
+function getStoredTokens() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(
-      ["accessToken", "refreshToken", "tokenExpiry"],
-      (result) => {
-        resolve(result);
-      },
-    );
+    chrome.storage.local.get(["accessToken"], (result) => {
+      resolve({ accessToken: result.accessToken || "" });
+    });
   });
 }
+
+function setStoredToken(accessToken) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ accessToken }, () => resolve());
+  });
+}
+
 /**
  * Fetches text content from a specific tab in a Google Doc using the REST API.
  * @param {string} docId - The ID of the Google Document.
@@ -258,6 +80,127 @@ function findTabById(tabs, id) {
   }
   return null;
 }
+async function processDocs() {
+  const links = parseDocLinks(document.getElementById("docLinks").value);
+  if (!links.length) {
+    alert("Please enter at least one valid Google Doc link.");
+    return;
+  }
+
+  const { accessToken } = await getStoredTokens();
+  if (!accessToken) {
+    statusDiv().innerText = "Error: No access token found. Please login first.";
+    return;
+  }
+
+  for (const student of links) {
+    statusDiv().innerText = `Processing Doc: ${student.docId}...`;
+    try {
+      const doc = await getTabContent(
+        student.docId,
+        student.tabId,
+        accessToken,
+      );
+      statusDiv().innerText = `Processed ${student.docId}`;
+      if (!doc) continue;
+      // 2. Parse the table content (Part IV)
+      let quesAndAnsArr = getQesAndAnsFromPartIVOfTheTargetTab(doc);
+      if (quesAndAnsArr) {
+        // 3. Send to your grading backend
+        const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: quesAndAnsArr }),
+        });
+
+        const result = await gradeResponse.json();
+        if (result) {
+          // 4. Parse AI response and write back to the SPECIFIC Doc and TAB
+          // ... (Your existing parsing logic for aiResponseArr) ...
+          // Pass the specific docId and tabId to your write function
+          await writeToGGDocFile(
+            result.raw,
+            student.docId,
+            accessToken,
+            student.tabId,
+          );
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      statusDiv().innerText = `Failed ${student.docId}: ${err.message}`;
+    }
+  }
+
+  statusDiv().innerText = "Processing complete!";
+}
+
+document.getElementById("processAllDocs").onclick = processDocs;
+
+document.getElementById("loginBtn").onclick = () => {
+  const status = statusDiv();
+  status.innerText = "Logging in...";
+
+  const manifest = chrome.runtime.getManifest();
+  const clientId = manifest.oauth2.client_id;
+  const scopes = manifest.oauth2.scopes;
+  const redirectUri = chrome.identity.getRedirectURL();
+
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scopes.join(" "))}&prompt=consent&include_granted_scopes=true`;
+
+  chrome.identity.launchWebAuthFlow(
+    { url: authUrl, interactive: true },
+    (redirectUrl) => {
+      if (chrome.runtime.lastError || !redirectUrl) {
+        const err = chrome.runtime.lastError
+          ? chrome.runtime.lastError.message
+          : "No redirect URL";
+        status.innerText = `Login error: ${err}`;
+        console.error("Auth error", chrome.runtime.lastError, redirectUrl);
+        return;
+      }
+
+      try {
+        const returned = new URL(redirectUrl);
+        const params = new URLSearchParams(returned.hash.substring(1));
+        const accessToken = params.get("access_token");
+        const expiresIn = parseInt(params.get("expires_in") || "3600", 10);
+
+        if (!accessToken) {
+          status.innerText = "Login error: no access token returned";
+          console.error("No access token in redirect URL:", redirectUrl);
+          return;
+        }
+
+        chrome.storage.local.set(
+          { accessToken, tokenExpiry: Date.now() + expiresIn * 1000 },
+          () => {
+            status.innerText = "Login successful! Token stored.";
+          },
+        );
+      } catch (e) {
+        status.innerText = "Login error: invalid auth response";
+        console.error("Auth response parsing error", e, redirectUrl);
+      }
+    },
+  );
+};
+
+document.getElementById("logout").onclick = () => {
+  chrome.identity.getAuthToken({ interactive: false }, (token) => {
+    if (token) {
+      chrome.identity.removeCachedAuthToken({ token }, () => {
+        chrome.storage.local.remove("accessToken", () => {
+          statusDiv().innerText = "Logged out";
+        });
+      });
+    } else {
+      chrome.storage.local.remove("accessToken", () => {
+        statusDiv().innerText = "Logged out";
+      });
+    }
+  });
+};
 
 const TAB_NAME_LIST = [
   { tableIndex: [5], tabName: "BUỔI 02" },
@@ -280,7 +223,7 @@ const TAB_NAME_LIST = [
 ];
 
 function getTableIndexOfExercise(tabName) {
-  const foundTab = TAB_NAME_LIST.find((item) => item.tabName === tabName);
+  const foundTab = TAB_NAME_LIST.find((item) => tabName.includes(item.tabName));
   return foundTab ? foundTab.tableIndex : null;
 }
 
@@ -297,7 +240,7 @@ function getQuesAndAnsForLesson23(exercisePart4) {
         let qnaObj = getNormalSentence(qna);
         if (qnaObj) quesAndAnsArrPartIV.push(qnaObj);
       } else if (qna.length === 3) {
-        qna = qna.map(item => item.content);
+        qna = qna.map((item) => item.content);
         let ques = [qna[0], qna[1]].join("");
         let ans = qna[2];
         let qnaObj = { question: ques, answer: ans };
@@ -409,7 +352,7 @@ function getQuesAndAnsForNormalLession(exercisePart4) {
 }
 
 function isSpecialLesson(tabTitle) {
-  return ["BUỔI 15", "BUỔI 16", "BUỔI 17"].includes(tabTitle);
+  return ["BUỔI 15", "BUỔI 16", "BUỔI 17", "BUỔI 22"].includes(tabTitle);
 }
 
 function getQesAndAnsFromPartIVOfTheTargetTab(targetTab) {
@@ -458,45 +401,9 @@ async function sendStudentExerciseToAIAgentoGetAnswer(
     alert("Error fetching document: " + err.message);
   }
 }
-// Separate function to fetch and display the document
-// async function fetchAndDisplayDocument(accessToken, redirectUri) {
-//   try {
-//     const doc = await getTabContent(DOC_ID, TAB_ID, accessToken);
-//     let quesAndAnsArrPartIV = getQesAndAnsFromPartIVOfTheTargetTab(doc);
-//     if (quesAndAnsArrPartIV) {
-//       // const agentResponse = await sendStudentExerciseToAIAgentoGetAnswer(
-//       //   quesAndAnsArrPartIV,
-//       //   redirectUri,
-//       // );
-//       try {
-//         // const result = JSON.parse(agentResponse);
-//         // let aiResponseArr = result.raw.split("\n");
-//         // let quesAndAnsResponse = [];
-//         // for (let i = 2; i < aiResponseArr.length - 2; i++) {
-//         //   let row = aiResponseArr[i]
-//         //     .substr(1, aiResponseArr[i].length - 2)
-//         //     .trim();
-//         //   let rowElements = row.split(" | ");
-//         //   quesAndAnsResponse.push({
-//         //     quesIndex: rowElements[0],
-//         //     quesContent: rowElements[1],
-//         //     studentAnswer: rowElements[2],
-//         //     aiAnswer: rowElements[3],
-//         //   });
-//         // }
-//         // writeToGGDocFile(agentResponse, DOC_ID, accessToken);
-//       } catch {}
-//     }
-//   } catch (err) {
-//     console.error(err);
-//     alert("Error fetching document: " + err.message);
-//   }
-// }
-
 async function writeToGGDocFile(agentResponse, DOC_ID, accessToken) {
   try {
-    const result = JSON.parse(agentResponse);
-    let aiResponseArr = result.raw.split("\n");
+    let aiResponseArr = agentResponse.split("\n");
     let quesAndAnsResponse = [];
     for (let i = 2; i < aiResponseArr.length - 2; i++) {
       let row = aiResponseArr[i].substr(1, aiResponseArr[i].length - 2).trim();
@@ -602,13 +509,3 @@ function parseDocLinks(text) {
 
   return docObjects;
 }
-
-// Optional: Add a logout button functionality
-document.getElementById("logout")?.addEventListener("click", async () => {
-  await chrome.storage.local.remove([
-    "accessToken",
-    "refreshToken",
-    "tokenExpiry",
-  ]);
-  alert("Logged out successfully. You will need to re-authenticate next time.");
-});
