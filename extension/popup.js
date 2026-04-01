@@ -1,6 +1,4 @@
-﻿const DOC_ID = "1qcO8zJLzD9E3MGN-lYjwegx3L8TZpX2wBClnXUjG8mI";
-const TAB_ID = "t.0";
-
+﻿
 const statusDiv = () => document.getElementById("status");
 
 const DOMAIN_BE = "http://localhost:3000";
@@ -119,10 +117,10 @@ async function processDocs() {
           // ... (Your existing parsing logic for aiResponseArr) ...
           // Pass the specific docId and tabId to your write function
           await writeToGGDocFile(
-            result.raw,
+            result.assistantText,
             student.docId,
-            accessToken,
             student.tabId,
+            accessToken
           );
         }
       }
@@ -401,13 +399,13 @@ async function sendStudentExerciseToAIAgentoGetAnswer(
     alert("Error fetching document: " + err.message);
   }
 }
-async function writeToGGDocFile(agentResponse, DOC_ID, accessToken) {
+async function writeToGGDocFile(agentResponse, DOC_ID, TAB_ID, accessToken) {
   try {
     let aiResponseArr = agentResponse.split("\n");
     let quesAndAnsResponse = [];
     for (let i = 2; i < aiResponseArr.length - 2; i++) {
       let row = aiResponseArr[i].substr(1, aiResponseArr[i].length - 2).trim();
-      let rowElements = row.split(" | ");
+      let rowElements = row.split(" | ").map(item => item.trim());
       quesAndAnsResponse.push({
         quesIndex: rowElements[0],
         quesContent: rowElements[1],
