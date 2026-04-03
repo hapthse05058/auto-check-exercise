@@ -1,5 +1,4 @@
-﻿
-const statusDiv = () => document.getElementById("status");
+﻿const statusDiv = () => document.getElementById("status");
 
 const DOMAIN_BE = "http://localhost:3000";
 
@@ -91,6 +90,7 @@ async function processDocs() {
     return;
   }
 
+  let studentsExerciseList = [];
   for (const student of links) {
     statusDiv().innerText = `Processing Doc: ${student.docId}...`;
     try {
@@ -103,34 +103,66 @@ async function processDocs() {
       if (!doc) continue;
       // 2. Parse the table content (Part IV)
       let quesAndAnsArr = getQesAndAnsFromPartIVOfTheTargetTab(doc);
-      if (quesAndAnsArr) {
-        // 3. Send to your grading backend
-        const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ items: quesAndAnsArr }),
+      console.log(quesAndAnsArr)
+      if (quesAndAnsArr)
+        studentsExerciseList.push({
+          quesAndAnsArr: quesAndAnsArr,
+          student: student,
         });
-
-        const result = await gradeResponse.json();
-        if (result) {
-          // 4. Parse AI response and write back to the SPECIFIC Doc and TAB
-          // ... (Your existing parsing logic for aiResponseArr) ...
-          // Pass the specific docId and tabId to your write function
-          await writeToGGDocFile(
-            result.assistantText,
-            student.docId,
-            student.tabId,
-            accessToken
-          );
-        }
-      }
     } catch (err) {
       console.error(err);
       statusDiv().innerText = `Failed ${student.docId}: ${err.message}`;
     }
   }
 
+  // autoCheckExercises(studentsExerciseList, accessToken);
+
   statusDiv().innerText = "Processing complete!";
+}
+const chunkArray = (array, size) => {
+  const result = [];
+  for (let i = 0; i < array.length; i += size) {
+    result.push(array.slice(i, i + size));
+  }
+  return result;
+};
+
+async function autoCheckExercises(studentsExerciseList, accessToken) {
+  // Hàm tiện ích để chia mảng thành các nhóm nhỏ (Chunking)
+  if (studentsExerciseList.length) {
+    const CONCURRENCY_LIMIT = 5; // Chỉ chạy 5 người cùng lúc
+    const chunks = chunkArray(studentsExerciseList, CONCURRENCY_LIMIT);
+
+    for (const chunk of chunks) {
+      // Chạy song song 5 request trong chunk này
+      await Promise.all(
+        chunk.map(async (stuExercise) => {
+          const { quesAndAnsArr, student } = stuExercise;
+          console.log(student);
+          // 3. Send to your grading backend
+          const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: quesAndAnsArr }),
+          });
+
+          const result = await gradeResponse.json();
+          if (result) {
+            // 4. Parse AI response and write back to the SPECIFIC Doc and TAB
+            // ... (Your existing parsing logic for aiResponseArr) ...
+            // Pass the specific docId and tabId to your write function
+            await writeToGGDocFile(
+              result.assistantText,
+              student.docId,
+              student.tabId,
+              accessToken,
+            );
+          }
+        }),
+      );
+      alert(`Đã xong một nhóm ${CONCURRENCY_LIMIT} học sinh.`);
+    }
+  }
 }
 
 document.getElementById("processAllDocs").onclick = processDocs;
@@ -373,7 +405,6 @@ function getQesAndAnsFromPartIVOfTheTargetTab(targetTab) {
     quesAndAnsArrPartIV = getQuesAndAnsForNormalLession(exercisePart4);
   }
 
-  console.log(quesAndAnsArrPartIV);
   return quesAndAnsArrPartIV;
 }
 
@@ -399,53 +430,79 @@ async function sendStudentExerciseToAIAgentoGetAnswer(
     alert("Error fetching document: " + err.message);
   }
 }
+
+/**
+ * Processes the AI response and updates the specific Google Doc and Tab.
+ * @param {string} agentResponse - The raw text response from the OpenAI Assistant.
+ * @param {string} DOC_ID - The unique ID of the Google Document.
+ * @param {string} TAB_ID - The specific Tab ID (if applicable).
+ * @param {string} accessToken - The Google OAuth2 access token.
+ */
 async function writeToGGDocFile(agentResponse, DOC_ID, TAB_ID, accessToken) {
   try {
-    let aiResponseArr = agentResponse.split("\n");
-    let quesAndAnsResponse = [];
-    for (let i = 2; i < aiResponseArr.length - 2; i++) {
-      let row = aiResponseArr[i].substr(1, aiResponseArr[i].length - 2).trim();
-      let rowElements = row.split(" | ").map(item => item.trim());
-      quesAndAnsResponse.push({
-        quesIndex: rowElements[0],
-        quesContent: rowElements[1],
-        studentAnswer: rowElements[2],
-        aiAnswer: rowElements[3],
-      });
+    // 1. Clean the response by removing AI source citations (e.g., 【4:0†source】)
+    const cleanResponse = agentResponse.replace(/【.*?】/g, "");
+    const responseLines = cleanResponse.split("\n");
+    const gradingResults = [];
+
+    // 2. Parse the Markdown table rows dynamically
+    for (const line of responseLines) {
+      // Look for lines containing the pipe character (|) excluding table separators (---)
+      if (line.includes("|") && !line.includes("---")) {
+        // Remove leading and trailing pipes, then split into cells
+        const cleanLine = line.trim().replace(/^\||\|$/g, "");
+        const columns = cleanLine.split("|").map((col) => col.trim());
+        // Ensure the row has enough columns (Index, Content, Student Answer, AI Feedback)
+        if (columns.length >= 4) {
+          gradingResults.push({
+            questionIndex: columns[0],
+            aiFeedback: columns[3],
+          });
+        }
+      }
     }
-    // Build requests array for batch update
+
     const requests = [];
 
-    for (const [index, element] of quesAndAnsResponse.entries()) {
-      let result = containsCorrectMark(element.aiAnswer)
+    // 3. Build the batchUpdate request array
+    for (const [index, item] of gradingResults.entries()) {
+      // If the AI marks it correct (e.g., with a checkmark), we leave the text empty or skip
+      let feedbackText = containsCorrectMark(item.aiFeedback)
         ? ""
-        : element.aiAnswer;
+        : item.aiFeedback;
 
-      if (index === quesAndAnsResponse.length - 1) {
-        result +=
-          "\nCác câu còn lại đúng rồi em nha! Tiếp tục giữ phong độ này nhé! 💯🔥";
+      // Append a congratulatory message only to the very last processed item
+      if (index === gradingResults.length - 1) {
+        feedbackText +=
+          "\nThe remaining questions are correct! Keep up the great work! 💯🔥";
       }
 
-      requests.push({
-        replaceAllText: {
-          containsText: {
-            text: `Chữa bài câu ${element.quesIndex}.`,
-            matchCase: false,
+      if (item.questionIndex) {
+        requests.push({
+          replaceAllText: {
+            containsText: {
+              // Matches the placeholder in the Doc.
+              // Removed the trailing dot for better matching flexibility.
+              text: `Chữa bài câu ${item.questionIndex}.`,
+              matchCase: false,
+            },
+            replaceText: feedbackText,
+            // Only include tabsCriteria if a valid TAB_ID exists to prevent 500 errors
+            ...(TAB_ID ? { tabsCriteria: { tabIds: [TAB_ID] } } : {}),
           },
-          replaceText: result,
-          // Add this criteria to target the specific tab
-          tabsCriteria: {
-            tabIds: [TAB_ID],
-          },
-        },
-      });
+        });
+      }
     }
 
+    // 4. Handle empty request cases
     if (requests.length === 0) {
-      alert("done");
+      console.warn(
+        "No valid grading data could be parsed from the AI response.",
+      );
       return;
     }
 
+    // 5. Execute the batchUpdate call to Google Docs API
     const updateResponse = await fetch(
       `https://docs.googleapis.com/v1/documents/${DOC_ID}:batchUpdate`,
       {
@@ -454,25 +511,25 @@ async function writeToGGDocFile(agentResponse, DOC_ID, TAB_ID, accessToken) {
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          requests: requests,
-        }),
+        body: JSON.stringify({ requests }),
       },
     );
 
+    // 6. Error handling for the API response
     if (!updateResponse.ok) {
-      const updateText = await updateResponse.text();
-      console.error("Update error:", updateResponse.status, updateText);
+      const errorDetail = await updateResponse.json();
+      console.error("Google Docs API Request Failed:", errorDetail);
       throw new Error(
-        "Failed to update document: " +
-          updateResponse.status +
-          " " +
-          updateText,
+        `Google API Error: ${updateResponse.status} - ${JSON.stringify(errorDetail)}`,
       );
     }
 
-    alert("done");
-  } catch (err) {}
+    console.log(`Document [${DOC_ID}] updated successfully.`);
+  } catch (error) {
+    // Log the full error for debugging; do not leave the catch block empty
+    console.error(error);
+    alert(error.message)
+  }
 }
 
 function startsWithNumberDot(sentence) {
