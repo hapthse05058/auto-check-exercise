@@ -1,5 +1,5 @@
 ﻿const statusDiv = () => document.getElementById("status");
-
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const DOMAIN_BE = "http://localhost:3000";
 
 function parseDocLinks(text) {
@@ -103,7 +103,7 @@ async function processDocs() {
       if (!doc) continue;
       // 2. Parse the table content (Part IV)
       let quesAndAnsArr = getQesAndAnsFromPartIVOfTheTargetTab(doc);
-      console.log(quesAndAnsArr)
+      console.log(quesAndAnsArr);
       if (quesAndAnsArr)
         studentsExerciseList.push({
           quesAndAnsArr: quesAndAnsArr,
@@ -115,7 +115,7 @@ async function processDocs() {
     }
   }
 
-  // autoCheckExercises(studentsExerciseList, accessToken);
+  autoCheckExercises(studentsExerciseList, accessToken);
 
   statusDiv().innerText = "Processing complete!";
 }
@@ -136,9 +136,9 @@ async function autoCheckExercises(studentsExerciseList, accessToken) {
     for (const chunk of chunks) {
       // Chạy song song 5 request trong chunk này
       await Promise.all(
-        chunk.map(async (stuExercise) => {
+        chunk.map(async (stuExercise, index) => {
+          await sleep(index * 25000);
           const { quesAndAnsArr, student } = stuExercise;
-          console.log(student);
           // 3. Send to your grading backend
           const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
             method: "POST",
@@ -147,7 +147,7 @@ async function autoCheckExercises(studentsExerciseList, accessToken) {
           });
 
           const result = await gradeResponse.json();
-          if (result) {
+          if (result.assistantText) {
             // 4. Parse AI response and write back to the SPECIFIC Doc and TAB
             // ... (Your existing parsing logic for aiResponseArr) ...
             // Pass the specific docId and tabId to your write function
@@ -291,7 +291,9 @@ function getQuesAndAnsForSpecialLesson(exercisePart4) {
       let qna = item.tableCells[0].content.map(
         (item) => item.paragraph.elements[0].textRun,
       );
-
+      if (qna[0].content.includes("12")) {
+        console.log("ques 12");
+      }
       if (qna.length < 4) {
         let qnaObj = getNormalSentence(qna);
         if (qnaObj) quesAndAnsArrPartIV.push(qnaObj);
@@ -305,8 +307,10 @@ function getQuesAndAnsForSpecialLesson(exercisePart4) {
             .join("");
           return content;
         });
-        let qnaObjArr = getComplexSentence(qna);
-        if (qnaObjArr.length) quesAndAnsArrPartIV.push(...qnaObjArr);
+        // let qnaObjArr = getComplexSentence(qna);
+        // if (qnaObjArr.length) quesAndAnsArrPartIV.push(...qnaObjArr);
+        let qnaObj = getComplexSentence(qna);
+        if (qnaObj.question) quesAndAnsArrPartIV.push(qnaObj);
       }
     }
   }
@@ -331,21 +335,24 @@ function getNormalSentence(qna) {
 }
 
 function getComplexSentence(qna) {
-  let qnaObjArr = [];
-  let qnaObj = {};
+  let qnaObj = { question: "", answer: "" };
   for (let j = 0; j < qna.length; j++) {
     let qnaChild = qna[j];
-    if (startsWithNumberDot(qnaChild) || !startsWithArrow(qnaChild)) {
+    if (startsWithNumberDot(qnaChild)) {
       qnaObj.question = qnaChild;
     } else if (startsWithArrow(qnaChild)) {
-      qnaObj.answer = qnaChild;
-    }
-    if (qnaObj.question && qnaObj.answer) {
-      qnaObjArr.push(qnaObj);
-      qnaObj = {};
+      if (!qnaObj.answer) {
+        qnaObj.answer = qnaChild;
+      } else {
+        qnaObj.answer += "\n" + qnaChild;
+      }
+    } else {
+      if (qnaObj.question) {
+        qnaObj.question += "\n" + qnaChild;
+      }
     }
   }
-  return qnaObjArr;
+  return qnaObj;
 }
 
 function getQuesAndAnsForNormalLession(exercisePart4) {
@@ -382,7 +389,7 @@ function getQuesAndAnsForNormalLession(exercisePart4) {
 }
 
 function isSpecialLesson(tabTitle) {
-  return ["BUỔI 15", "BUỔI 16", "BUỔI 17", "BUỔI 22"].includes(tabTitle);
+  return ["BUỔI 15", "BUỔI 16", "BUỔI 17", "BUỔI 22"].find(tabName => tabTitle.includes(tabName));
 }
 
 function getQesAndAnsFromPartIVOfTheTargetTab(targetTab) {
@@ -441,8 +448,8 @@ async function sendStudentExerciseToAIAgentoGetAnswer(
 async function writeToGGDocFile(agentResponse, DOC_ID, TAB_ID, accessToken) {
   try {
     // 1. Clean the response by removing AI source citations (e.g., 【4:0†source】)
-    const cleanResponse = agentResponse.replace(/【.*?】/g, "");
-    const responseLines = cleanResponse.split("\n");
+    // const cleanResponse = agentResponse.replace(/【.*?】/g, "");
+    const responseLines = agentResponse.split("\n");
     const gradingResults = [];
 
     // 2. Parse the Markdown table rows dynamically
@@ -452,8 +459,13 @@ async function writeToGGDocFile(agentResponse, DOC_ID, TAB_ID, accessToken) {
         // Remove leading and trailing pipes, then split into cells
         const cleanLine = line.trim().replace(/^\||\|$/g, "");
         const columns = cleanLine.split("|").map((col) => col.trim());
-        // Ensure the row has enough columns (Index, Content, Student Answer, AI Feedback)
-        if (columns.length >= 4) {
+        // Ensure the row has enough columns (Index, Content, Student Answer, AI Feedback) and
+        // Check if questionIndex property is either empty (for sub-questions) or a number (for main questions)
+        if (
+          columns.length >= 4 &&
+          (columns[0] === "" || /^\d+$/.test(columns[0]))
+        ) {
+          //column[0] is either question index (1, 3, 4, 5,...) or empty (for sub-questions)
           gradingResults.push({
             questionIndex: columns[0],
             aiFeedback: columns[3],
@@ -465,7 +477,7 @@ async function writeToGGDocFile(agentResponse, DOC_ID, TAB_ID, accessToken) {
     const requests = [];
 
     // 3. Build the batchUpdate request array
-    for (const [index, item] of gradingResults.entries()) {
+    for (let [index, item] of gradingResults.entries()) {
       // If the AI marks it correct (e.g., with a checkmark), we leave the text empty or skip
       let feedbackText = containsCorrectMark(item.aiFeedback)
         ? ""
@@ -473,8 +485,10 @@ async function writeToGGDocFile(agentResponse, DOC_ID, TAB_ID, accessToken) {
 
       // Append a congratulatory message only to the very last processed item
       if (index === gradingResults.length - 1) {
-        feedbackText +=
-          "\nThe remaining questions are correct! Keep up the great work! 💯🔥";
+        feedbackText = feedbackText 
+                      ? feedbackText += "\n"
+                      : '';
+        feedbackText += "Các câu còn lại đúng rồi em nha! Tiếp tục cố gắng và cẩn thận thế này nhé em! 💯🔥";
       }
 
       if (item.questionIndex) {
@@ -491,6 +505,30 @@ async function writeToGGDocFile(agentResponse, DOC_ID, TAB_ID, accessToken) {
             ...(TAB_ID ? { tabsCriteria: { tabIds: [TAB_ID] } } : {}),
           },
         });
+      }
+      //Handle sub-question cases: If questionIndex is empty, it means it's a sub-question of the previous question. We will append the feedback to the previous question's feedback.
+      else if (item.questionIndex === "" && feedbackText) {
+        const lastIndex = requests.length - 1;
+        const previousQuestion = gradingResults[index - 1];
+        feedbackText = requests[lastIndex].replaceAllText.replaceText 
+                      ? (requests[lastIndex].replaceAllText.replaceText +
+                        "\n\n" +
+                        feedbackText) 
+                      : feedbackText;
+        // Update the previous request to include this feedback as well
+        requests[lastIndex] = {
+          replaceAllText: {
+            containsText: {
+              // Matches the placeholder in the Doc.
+              // Removed the trailing dot for better matching flexibility.
+              text: `Chữa bài câu ${previousQuestion.questionIndex}.`,
+              matchCase: false,
+            },
+            replaceText: feedbackText,
+            // Only include tabsCriteria if a valid TAB_ID exists to prevent 500 errors
+            ...(TAB_ID ? { tabsCriteria: { tabIds: [TAB_ID] } } : {}),
+          },
+        };
       }
     }
 
@@ -528,7 +566,7 @@ async function writeToGGDocFile(agentResponse, DOC_ID, TAB_ID, accessToken) {
   } catch (error) {
     // Log the full error for debugging; do not leave the catch block empty
     console.error(error);
-    alert(error.message)
+    alert(error.message);
   }
 }
 
