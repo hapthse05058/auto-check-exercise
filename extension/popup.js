@@ -160,8 +160,8 @@ async function autoCheckExercises(studentsExerciseList, accessToken) {
           }
         }),
       );
-      alert(`Đã xong một nhóm ${CONCURRENCY_LIMIT} học sinh.`);
     }
+    alert(`Đã chấm bài xong, bạn hãy review lại kết quả nhé!`);
   }
 }
 
@@ -235,7 +235,7 @@ document.getElementById("logout").onclick = () => {
 const TAB_NAME_LIST = [
   { tableIndex: [5], tabName: "BUỔI 02" },
   { tableIndex: [5], tabName: "BUỔI 03" },
-  { tableIndex: [5], tabName: "BUỔI 04" },
+  { tableIndex: [5, 6, 7, 8, 9], tabName: "BUỔI 04" },
   { tableIndex: [5, 6, 7], tabName: "BUỔI 05" },
   { tableIndex: [7, 8, 9], tabName: "BUỔI 09" },
   { tableIndex: [7], tabName: "BUỔI 10" },
