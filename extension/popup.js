@@ -1,6 +1,246 @@
 ﻿const statusDiv = () => document.getElementById("status");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const DOMAIN_BE = "http://localhost:3000";
+var loginBtn = document.getElementById("loginBtn");
+var logoutBtn = document.getElementById("logoutBtn");
+var processAllDocs = document.getElementById("processAllDocs");
+var container = document.getElementById("container");
+const PLEASE_LOGIN_MESSAGE = "Please login to use the extension...";
+const READY_TO_PROCESS_MESSAGE = "Ready to process...";
+
+function handleAfterLogout() {
+  statusDiv().innerText = PLEASE_LOGIN_MESSAGE;
+  container.style.display = "none";
+  loginBtn.style.display = "block";
+  logoutBtn.style.display = "none";
+}
+function handleAfterLogin() {
+  statusDiv().innerText = READY_TO_PROCESS_MESSAGE;
+  container.style.display = "block";
+  loginBtn.style.display = "none";
+  logoutBtn.style.display = "block";
+  console.log("Login successful! Token stored.");
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  console.log("Popup has initialized!");
+  // 1. Initialize global variables or UI
+  const status = document.getElementById("status");
+  // 2. Load stored data (like your accessToken)
+  const data = await chrome.storage.local.get(["access_token"]);
+  if (data.accessToken) {
+    console.log("Token found on init:", data.accessToken);
+    handleAfterLogin();
+  } else {
+    handleAfterLogout();
+  }
+});
+
+async function ensureValidToken() {
+  const result = await new Promise((resolve) => {
+    chrome.storage.local.get(["access_token", "expiry_date"], resolve);
+  });
+
+  const now = Date.now();
+  // Nếu token còn hạn trên 5 phút, dùng tiếp
+  if (
+    result.access_token &&
+    result.expiry_date &&
+    result.expiry_date - now > 300000
+  ) {
+    // handleAfterLogin();
+    return result.access_token;
+  }
+
+  // Nếu token hết hạn, thử refresh ngầm
+  try {
+    return await refreshSilentToken();
+  } catch (err) {
+    console.warn("Silent refresh failed:", err);
+    // QUAN TRỌNG: Thông báo cho user biết cần login thủ công
+    statusDiv().innerText =
+      "Session expired. Please click 'Login' to continue.";
+    handleAfterLogout();
+    throw new Error("RE-AUTH_NEEDED");
+  }
+}
+
+async function refreshSilentToken() {
+  const result = await new Promise((resolve) => {
+    chrome.storage.local.get(["refresh_token", "refresh_token_expires_date"], resolve);
+  });
+  // const { refreshToken } = await new Promise((resolve) => {
+  //   chrome.storage.local.get(["refresh_token"], resolve);
+  // });
+  if (!result.refresh_token || result.refresh_token_expires_date - Date.now() <= 0) {
+    handleAfterLogout();
+    statusDiv().innerText = "No refresh token available. Please login again.";
+    throw new Error("No refresh token available. Please login again.");
+  }
+  try {
+    const response = await fetch(`${DOMAIN_BE}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(result.refresh_token),
+    });
+
+    if (!response.ok) {
+      handleAfterLogout();
+      statusDiv().innerText = "Failed to refresh token. Please login again.";
+      throw new Error("Failed to refresh token");
+    }
+
+    const data = await response.json();
+
+    // Cập nhật Access Token mới vào storage
+    await chrome.storage.local.set({
+      access_token: data.access_token,
+      expiry_date: data.expiry_date,
+      refresh_token: data.refresh_token,
+      refresh_token_expires_date: data.refresh_token_expires_date,
+    });
+
+    handleAfterLogin();
+    return data.access_token;
+  } catch (error) {
+    console.error("Refresh error:", error);
+    handleAfterLogout();
+    statusDiv().innerText = "Error refreshing token. Please login again.";
+    throw error;
+  }
+}
+
+// --- CẬP NHẬT: HÀM PROCESS ĐỂ TỰ REFRESH ---
+async function processDocs() {
+  const links = parseDocLinks(document.getElementById("docLinks").value);
+  if (!links.length) {
+    alert("Please enter at least one valid Google Doc link.");
+    return;
+  }
+
+  let accessToken;
+
+  let studentsExerciseList = [];
+  for (const student of links) {
+    statusDiv().innerText = `Processing Doc: ${student.docId}...`;
+    try {
+      // Trước mỗi lần gọi API lớn, nên check lại token nếu list docs quá dài
+      accessToken = await ensureValidToken();
+
+      const doc = await getTabContent(
+        student.docId,
+        student.tabId,
+        accessToken,
+      );
+      if (!doc) continue;
+
+      let quesAndAnsArr = getQesAndAnsFromPartIVOfTheTargetTab(doc);
+      if (quesAndAnsArr && quesAndAnsArr.length > 0) {
+        studentsExerciseList.push({
+          quesAndAnsArr: quesAndAnsArr,
+          student: student,
+        });
+      }
+    } catch (err) {
+      console.error(err);
+      statusDiv().innerText = `Failed ${student.docId}: ${err.message}`;
+    }
+  }
+  statusDiv().innerText = `Finished fetching content from all docs. Starting auto-check...`;
+
+  autoCheckExercises(studentsExerciseList);
+}
+
+async function autoCheckExercises(studentsExerciseList) {
+  if (!studentsExerciseList.length) return;
+
+  const CONCURRENCY_LIMIT = 5;
+  const chunks = chunkArray(studentsExerciseList, CONCURRENCY_LIMIT);
+
+  for (const chunk of chunks) {
+    await Promise.all(
+      chunk.map(async (stuExercise, index) => {
+        await sleep(index * 25000);
+
+        // Refresh token trước khi viết file vì quá trình chờ AI có thể rất lâu (25s * index)
+        const currentToken = await ensureValidToken();
+
+        const { quesAndAnsArr, student } = stuExercise;
+        try {
+          const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: quesAndAnsArr }),
+          });
+
+          const result = await gradeResponse.json();
+          if (result.assistantText) {
+            await writeToGGDocFile(
+              result.assistantText,
+              student.docId,
+              student.tabId,
+              currentToken,
+            );
+          }
+        } catch (err) {
+          console.error("AutoCheck Error:", err);
+        }
+      }),
+    );
+    statusDiv().innerText += `\n Complete handling ${chunk.length} doc, continue...`;
+  }
+  alert(`Đã chấm bài xong, bạn hãy review lại kết quả nhé!`);
+  statusDiv().innerText = "Processing complete!";
+}
+
+document.getElementById("loginBtn").onclick = () => {
+  const status = statusDiv();
+  status.innerText = "Logging in...";
+
+  const manifest = chrome.runtime.getManifest();
+  const clientId = manifest.oauth2.client_id;
+  const scopes = manifest.oauth2.scopes;
+  const redirectUri = chrome.identity.getRedirectURL();
+
+  // Trong popup.js - Hàm Login
+  const authUrl =
+    `https://accounts.google.com/o/oauth2/v2/auth?` +
+    `client_id=${encodeURIComponent(clientId)}&` +
+    `response_type=code&` + // Chuyển thành 'code' thay vì 'token'
+    `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+    `scope=${encodeURIComponent(scopes.join(" "))}&` +
+    `prompt=consent&` +
+    `access_type=offline&` + // BẮT BUỘC để lấy Refresh Token
+    `include_granted_scopes=true`;
+
+  chrome.identity.launchWebAuthFlow(
+    { url: authUrl, interactive: true },
+    async (redirectUrl) => {
+      const url = new URL(redirectUrl);
+      const code = url.searchParams.get("code"); // Lấy 'code' từ query string
+
+      if (code) {
+        // Gửi code này lên Backend của bạn để xử lý đổi Token
+        const response = await fetch(`${DOMAIN_BE}/auth/google`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code }),
+        });
+        const tokens = await response.json();
+
+        // Lưu Access Token và Refresh Token vào storage
+        chrome.storage.local.set({
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token, // Lưu Refresh Token ở đây
+          refresh_token_expires_date: tokens.refresh_token_expires_date, // Lưu thời gian hết hạn của Refresh Token
+          expiry_date: tokens.expiry_date,
+        });
+        handleAfterLogin();
+        status.innerText = READY_TO_PROCESS_MESSAGE;
+      }
+    },
+  );
+};
 
 function parseDocLinks(text) {
   const links = [];
@@ -16,17 +256,17 @@ function parseDocLinks(text) {
 
 function getStoredTokens() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(["accessToken"], (result) => {
+    chrome.storage.local.get(["access_token"], (result) => {
       resolve({ accessToken: result.accessToken || "" });
     });
   });
 }
 
-function setStoredToken(accessToken) {
-  return new Promise((resolve) => {
-    chrome.storage.local.set({ accessToken }, () => resolve());
-  });
-}
+// function setStoredToken(accessToken) {
+//   return new Promise((resolve) => {
+//     chrome.storage.local.set({ accessToken }, () => resolve());
+//   });
+// }
 
 /**
  * Fetches text content from a specific tab in a Google Doc using the REST API.
@@ -77,48 +317,6 @@ function findTabById(tabs, id) {
   }
   return null;
 }
-async function processDocs() {
-  const links = parseDocLinks(document.getElementById("docLinks").value);
-  if (!links.length) {
-    alert("Please enter at least one valid Google Doc link.");
-    return;
-  }
-
-  const { accessToken } = await getStoredTokens();
-  if (!accessToken) {
-    statusDiv().innerText = "Error: No access token found. Please login first.";
-    return;
-  }
-
-  let studentsExerciseList = [];
-  for (const student of links) {
-    statusDiv().innerText = `Processing Doc: ${student.docId}...`;
-    try {
-      const doc = await getTabContent(
-        student.docId,
-        student.tabId,
-        accessToken,
-      );
-      statusDiv().innerText = `Processed ${student.docId}`;
-      if (!doc) continue;
-      // 2. Parse the table content (Part IV)
-      let quesAndAnsArr = getQesAndAnsFromPartIVOfTheTargetTab(doc);
-      console.log(quesAndAnsArr);
-      if (quesAndAnsArr)
-        studentsExerciseList.push({
-          quesAndAnsArr: quesAndAnsArr,
-          student: student,
-        });
-    } catch (err) {
-      console.error(err);
-      statusDiv().innerText = `Failed ${student.docId}: ${err.message}`;
-    }
-  }
-
-  autoCheckExercises(studentsExerciseList, accessToken);
-
-  statusDiv().innerText = "Processing complete!";
-}
 const chunkArray = (array, size) => {
   const result = [];
   for (let i = 0; i < array.length; i += size) {
@@ -127,108 +325,22 @@ const chunkArray = (array, size) => {
   return result;
 };
 
-async function autoCheckExercises(studentsExerciseList, accessToken) {
-  // Hàm tiện ích để chia mảng thành các nhóm nhỏ (Chunking)
-  if (studentsExerciseList.length) {
-    const CONCURRENCY_LIMIT = 5; // Chỉ chạy 5 người cùng lúc
-    const chunks = chunkArray(studentsExerciseList, CONCURRENCY_LIMIT);
-
-    for (const chunk of chunks) {
-      // Chạy song song 5 request trong chunk này
-      await Promise.all(
-        chunk.map(async (stuExercise, index) => {
-          await sleep(index * 25000);
-          const { quesAndAnsArr, student } = stuExercise;
-          // 3. Send to your grading backend
-          const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ items: quesAndAnsArr }),
-          });
-
-          const result = await gradeResponse.json();
-          if (result.assistantText) {
-            // 4. Parse AI response and write back to the SPECIFIC Doc and TAB
-            // ... (Your existing parsing logic for aiResponseArr) ...
-            // Pass the specific docId and tabId to your write function
-            await writeToGGDocFile(
-              result.assistantText,
-              student.docId,
-              student.tabId,
-              accessToken,
-            );
-          }
-        }),
-      );
-    }
-    alert(`Đã chấm bài xong, bạn hãy review lại kết quả nhé!`);
-  }
-}
-
 document.getElementById("processAllDocs").onclick = processDocs;
 
-document.getElementById("loginBtn").onclick = () => {
-  const status = statusDiv();
-  status.innerText = "Logging in...";
-
-  const manifest = chrome.runtime.getManifest();
-  const clientId = manifest.oauth2.client_id;
-  const scopes = manifest.oauth2.scopes;
-  const redirectUri = chrome.identity.getRedirectURL();
-
-  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scopes.join(" "))}&prompt=consent&include_granted_scopes=true`;
-
-  chrome.identity.launchWebAuthFlow(
-    { url: authUrl, interactive: true },
-    (redirectUrl) => {
-      if (chrome.runtime.lastError || !redirectUrl) {
-        const err = chrome.runtime.lastError
-          ? chrome.runtime.lastError.message
-          : "No redirect URL";
-        status.innerText = `Login error: ${err}`;
-        console.error("Auth error", chrome.runtime.lastError, redirectUrl);
-        return;
-      }
-
-      try {
-        const returned = new URL(redirectUrl);
-        const params = new URLSearchParams(returned.hash.substring(1));
-        const accessToken = params.get("access_token");
-        const expiresIn = parseInt(params.get("expires_in") || "3600", 10);
-
-        if (!accessToken) {
-          status.innerText = "Login error: no access token returned";
-          console.error("No access token in redirect URL:", redirectUrl);
-          return;
-        }
-
-        chrome.storage.local.set(
-          { accessToken, tokenExpiry: Date.now() + expiresIn * 1000 },
-          () => {
-            status.innerText = "Login successful! Token stored.";
-          },
-        );
-      } catch (e) {
-        status.innerText = "Login error: invalid auth response";
-        console.error("Auth response parsing error", e, redirectUrl);
-      }
-    },
-  );
-};
-
-document.getElementById("logout").onclick = () => {
+document.getElementById("logoutBtn").onclick = () => {
   chrome.identity.getAuthToken({ interactive: false }, (token) => {
     if (token) {
       chrome.identity.removeCachedAuthToken({ token }, () => {
-        chrome.storage.local.remove("accessToken", () => {
-          statusDiv().innerText = "Logged out";
+        chrome.storage.local.remove("access_token", () => {
+          statusDiv().innerText = PLEASE_LOGIN_MESSAGE;
         });
       });
     } else {
-      chrome.storage.local.remove("accessToken", () => {
-        statusDiv().innerText = "Logged out";
+      chrome.storage.local.remove("access_token", () => {
+        statusDiv().innerText = PLEASE_LOGIN_MESSAGE;
       });
     }
+    handleAfterLogout();
   });
 };
 
@@ -291,9 +403,6 @@ function getQuesAndAnsForSpecialLesson(exercisePart4) {
       let qna = item.tableCells[0].content.map(
         (item) => item.paragraph.elements[0].textRun,
       );
-      if (qna[0].content.includes("12")) {
-        console.log("ques 12");
-      }
       if (qna.length < 4) {
         let qnaObj = getNormalSentence(qna);
         if (qnaObj) quesAndAnsArrPartIV.push(qnaObj);
@@ -307,8 +416,6 @@ function getQuesAndAnsForSpecialLesson(exercisePart4) {
             .join("");
           return content;
         });
-        // let qnaObjArr = getComplexSentence(qna);
-        // if (qnaObjArr.length) quesAndAnsArrPartIV.push(...qnaObjArr);
         let qnaObj = getComplexSentence(qna);
         if (qnaObj.question) quesAndAnsArrPartIV.push(qnaObj);
       }
@@ -389,7 +496,9 @@ function getQuesAndAnsForNormalLession(exercisePart4) {
 }
 
 function isSpecialLesson(tabTitle) {
-  return ["BUỔI 15", "BUỔI 16", "BUỔI 17", "BUỔI 22"].find(tabName => tabTitle.includes(tabName));
+  return ["BUỔI 15", "BUỔI 16", "BUỔI 17", "BUỔI 22"].find((tabName) =>
+    tabTitle.includes(tabName),
+  );
 }
 
 function getQesAndAnsFromPartIVOfTheTargetTab(targetTab) {
@@ -485,10 +594,9 @@ async function writeToGGDocFile(agentResponse, DOC_ID, TAB_ID, accessToken) {
 
       // Append a congratulatory message only to the very last processed item
       if (index === gradingResults.length - 1) {
-        feedbackText = feedbackText 
-                      ? feedbackText += "\n"
-                      : '';
-        feedbackText += "Các câu còn lại đúng rồi em nha! Tiếp tục cố gắng và cẩn thận thế này nhé em! 💯🔥";
+        feedbackText = feedbackText ? (feedbackText += "\n") : "";
+        feedbackText +=
+          "Các câu còn lại đúng rồi em nha! Tiếp tục cố gắng và cẩn thận thế này nhé em! 💯🔥";
       }
 
       if (item.questionIndex) {
@@ -510,11 +618,11 @@ async function writeToGGDocFile(agentResponse, DOC_ID, TAB_ID, accessToken) {
       else if (item.questionIndex === "" && feedbackText) {
         const lastIndex = requests.length - 1;
         const previousQuestion = gradingResults[index - 1];
-        feedbackText = requests[lastIndex].replaceAllText.replaceText 
-                      ? (requests[lastIndex].replaceAllText.replaceText +
-                        "\n\n" +
-                        feedbackText) 
-                      : feedbackText;
+        feedbackText = requests[lastIndex].replaceAllText.replaceText
+          ? requests[lastIndex].replaceAllText.replaceText +
+            "\n\n" +
+            feedbackText
+          : feedbackText;
         // Update the previous request to include this feedback as well
         requests[lastIndex] = {
           replaceAllText: {

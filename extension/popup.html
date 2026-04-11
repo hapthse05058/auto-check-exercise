@@ -1,36 +1,28 @@
 <html>
   <header>
     <meta charset="UTF-8" />
+    <link rel="stylesheet" href="popup.css" />
   </header>
   <body>
-    <div class="container">
-      <h3>Student Document List</h3>
-      <textarea
-        id="docLinks"
-        placeholder="Paste Google Doc links here (one per line)..."
-        rows="10"
-        style="width: 100%"
-      ></textarea>
-      <button id="processAllDocs">Process All Documents</button>
-      <div id="status"></div>
+    <div class="extension-container">
+      <div id="container">
+        <h3>Auto review exercises</h3>
+        <textarea
+          id="docLinks"
+          class="mb-1"
+          placeholder="Paste Google Doc links here (one per line)..."
+          rows="10"
+          style="width: 100%"
+        ></textarea>
+        <button class="mb-1" id="processAllDocs">Process All Documents</button>
+      </div>
+      <div id="btn-group">
+        <div class="mb-1" id="status"></div>
+        <button class="mb-1 login-btn" id="loginBtn">Login</button>
+        <button class="mb-1 logout-btn" id="logoutBtn">Logout</button>
+      </div>
+      <div id="result"></div>
     </div>
-    <button id="loginBtn">Login</button>
-    <button
-      id="logout"
-      style="
-        margin-left: 10px;
-        background-color: #f44336;
-        color: white;
-        border: none;
-        padding: 5px 10px;
-        cursor: pointer;
-      "
-    >
-      Logout
-    </button>
-
-    <div id="result"></div>
-
     <script src="popup.js"></script>
   </body>
 </html>
