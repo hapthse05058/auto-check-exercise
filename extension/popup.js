@@ -1,12 +1,17 @@
 ﻿const statusDiv = () => document.getElementById("status");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const DOMAIN_BE = "http://localhost:3000";
+const DOMAIN_BE_DEV = "http://localhost:3000";
+const DOMAIN_BE_PROD =
+  "https://backend-checker-159733287448.asia-southeast1.run.app";
+const ENVIRONMENT = "dev";
+const DOMAIN_BE = ENVIRONMENT === "PROD" ? DOMAIN_BE_PROD : DOMAIN_BE_DEV;
 var loginBtn = document.getElementById("loginBtn");
 var logoutBtn = document.getElementById("logoutBtn");
 var processAllDocs = document.getElementById("processAllDocs");
 var container = document.getElementById("container");
 const PLEASE_LOGIN_MESSAGE = "Please login to use the extension...";
 const READY_TO_PROCESS_MESSAGE = "Ready to process...";
+const EXTENSION_SECRET_KEY = "SuperSecretKey_hongHa_321";
 
 function handleAfterLogout() {
   statusDiv().innerText = PLEASE_LOGIN_MESSAGE;
@@ -67,9 +72,15 @@ async function ensureValidToken() {
 
 async function refreshSilentToken() {
   const result = await new Promise((resolve) => {
-    chrome.storage.local.get(["refresh_token", "refresh_token_expires_date"], resolve);
+    chrome.storage.local.get(
+      ["refresh_token", "refresh_token_expires_date"],
+      resolve,
+    );
   });
-  if (!result.refresh_token || result.refresh_token_expires_date - Date.now() <= 0) {
+  if (
+    !result.refresh_token ||
+    result.refresh_token_expires_date - Date.now() <= 0
+  ) {
     handleAfterLogout();
     statusDiv().innerText = "No refresh token available. Please login again.";
     throw new Error("No refresh token available. Please login again.");
@@ -78,7 +89,7 @@ async function refreshSilentToken() {
     const response = await fetch(`${DOMAIN_BE}/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: result.refresh_token}),
+      body: JSON.stringify({ refresh_token: result.refresh_token }),
     });
 
     if (!response.ok) {
@@ -145,7 +156,7 @@ async function processDocs() {
   }
   statusDiv().innerText = `Finished fetching content from all docs. Starting auto-check...`;
 
-  // autoCheckExercises(studentsExerciseList);
+  autoCheckExercises(studentsExerciseList);
 }
 
 async function autoCheckExercises(studentsExerciseList) {
@@ -166,7 +177,11 @@ async function autoCheckExercises(studentsExerciseList) {
         try {
           const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { 
+              "Authorization": `Bearer ${currentToken}`,
+              "Content-Type": "application/json",
+              "x-api-key": EXTENSION_SECRET_KEY,
+            },
             body: JSON.stringify({ items: quesAndAnsArr }),
           });
 
@@ -521,28 +536,32 @@ function getQesAndAnsFromPartIVOfTheTargetTab(targetTab) {
   return quesAndAnsArrPartIV;
 }
 
-async function sendStudentExerciseToAIAgentoGetAnswer(
-  quesAndAnsArrPartIV,
-  redirectUri,
-) {
-  try {
-    const response = await fetch(`${domain}/grade`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        items: quesAndAnsArrPartIV,
-        redirectUri: redirectUri,
-      }),
-    });
-    const text = response.text();
-    if (!response.ok) {
-      throw new Error(`Grade API error ${response.status}: ${text}`);
-    }
-    return text;
-  } catch (err) {
-    alert("Error fetching document: " + err.message);
-  }
-}
+// async function sendStudentExerciseToAIAgentoGetAnswer(
+//   quesAndAnsArrPartIV,
+//   redirectUri,
+// ) {
+//   try {
+//     const response = await fetch(`${domain}/grade`, {
+//       method: "POST",
+//       headers: {
+//         "Authorization": `Bearer ${auth}`,
+//         "Content-Type": "application/json",
+//         "x-api-key": "MA_BI_MAT_CUA_BAN", // Vẫn giữ lớp bảo vệ này
+//       },
+//       body: JSON.stringify({
+//         items: quesAndAnsArrPartIV,
+//         redirectUri: redirectUri,
+//       }),
+//     });
+//     const text = response.text();
+//     if (!response.ok) {
+//       throw new Error(`Grade API error ${response.status}: ${text}`);
+//     }
+//     return text;
+//   } catch (err) {
+//     alert("Error fetching document: " + err.message);
+//   }
+// }
 
 /**
  * Processes the AI response and updates the specific Google Doc and Tab.
