@@ -5,24 +5,25 @@
   </header>
   <body>
     <div class="extension-container">
+      <div class="mb-1">
+        <h3 class="m-0">Auto review exercises tool - For Basic classes</h3>
+        <div id="btn-group" class="btn-group">
+          <button class="primary-btn float-r" id="loginBtn">Login</button>
+          <button class="logout-btn" id="logoutBtn">Logout</button>
+        </div>
+      </div>
       <div id="container">
-        <h3>Auto review exercises</h3>
         <textarea
           id="docLinks"
           class="mb-1"
           placeholder="Paste Google Doc links here (one per line)..."
           rows="10"
-          style="width: 100%"
         ></textarea>
-        <button class="mb-1" id="processAllDocs">Process All Documents</button>
-      </div>
-      <div id="btn-group">
-        <div class="mb-1" id="status"></div>
-        <button class="mb-1 login-btn" id="loginBtn">Login</button>
-        <button class="mb-1 logout-btn" id="logoutBtn">Logout</button>
+        <button class="mb-1 primary-btn" id="processAllDocs">Process All Documents</button>
       </div>
       <div id="result"></div>
     </div>
+    <div class="mb-1" id="status"></div>
     <script src="popup.js"></script>
   </body>
 </html>

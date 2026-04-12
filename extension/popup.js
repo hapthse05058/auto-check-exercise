@@ -28,8 +28,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   const status = document.getElementById("status");
   // 2. Load stored data (like your accessToken)
   const data = await chrome.storage.local.get(["access_token"]);
-  if (data.accessToken) {
-    console.log("Token found on init:", data.accessToken);
+  if (data.access_token) {
+    console.log("Token found on init:", data.access_token);
     handleAfterLogin();
   } else {
     handleAfterLogout();
@@ -69,9 +69,6 @@ async function refreshSilentToken() {
   const result = await new Promise((resolve) => {
     chrome.storage.local.get(["refresh_token", "refresh_token_expires_date"], resolve);
   });
-  // const { refreshToken } = await new Promise((resolve) => {
-  //   chrome.storage.local.get(["refresh_token"], resolve);
-  // });
   if (!result.refresh_token || result.refresh_token_expires_date - Date.now() <= 0) {
     handleAfterLogout();
     statusDiv().innerText = "No refresh token available. Please login again.";
@@ -81,7 +78,7 @@ async function refreshSilentToken() {
     const response = await fetch(`${DOMAIN_BE}/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(result.refresh_token),
+      body: JSON.stringify({ refresh_token: result.refresh_token}),
     });
 
     if (!response.ok) {
@@ -148,7 +145,7 @@ async function processDocs() {
   }
   statusDiv().innerText = `Finished fetching content from all docs. Starting auto-check...`;
 
-  autoCheckExercises(studentsExerciseList);
+  // autoCheckExercises(studentsExerciseList);
 }
 
 async function autoCheckExercises(studentsExerciseList) {
