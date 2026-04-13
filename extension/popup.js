@@ -3,7 +3,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const DOMAIN_BE_DEV = "http://localhost:3000";
 const DOMAIN_BE_PROD =
   "https://backend-checker-159733287448.asia-southeast1.run.app";
-const ENVIRONMENT = "dev";
+const ENVIRONMENT = "PROD";
 const DOMAIN_BE = ENVIRONMENT === "PROD" ? DOMAIN_BE_PROD : DOMAIN_BE_DEV;
 var loginBtn = document.getElementById("loginBtn");
 var logoutBtn = document.getElementById("logoutBtn");
