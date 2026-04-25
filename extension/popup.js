@@ -1,9 +1,17 @@
-﻿const statusDiv = () => document.getElementById("status");
+﻿// start create fake data
+const contentMain = (async () => {
+  const src = chrome.runtime.getURL('./assets/mockData.js');
+  const fakeData = await import(src);
+  return fakeData;
+})();
+// end create fake data
+const project_number = "159733287448";
+const statusDiv = () => document.getElementById("status");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const DOMAIN_BE_DEV = "http://localhost:3000";
 const DOMAIN_BE_PROD =
   "https://backend-checker-159733287448.asia-southeast1.run.app";
-const ENVIRONMENT = "PROD";
+const ENVIRONMENT = "dev";
 const DOMAIN_BE = ENVIRONMENT === "PROD" ? DOMAIN_BE_PROD : DOMAIN_BE_DEV;
 var loginBtn = document.getElementById("loginBtn");
 var logoutBtn = document.getElementById("logoutBtn");
@@ -118,7 +126,7 @@ async function refreshSilentToken() {
   }
 }
 
-// --- CẬP NHẬT: HÀM PROCESS ĐỂ TỰ REFRESH ---
+//Get content by doc id and tab id
 async function processDocs() {
   const links = parseDocLinks(document.getElementById("docLinks").value);
   if (!links.length) {
@@ -141,6 +149,7 @@ async function processDocs() {
         accessToken,
       );
       if (!doc) continue;
+      student.exercise = doc;
 
       let quesAndAnsArr = getQesAndAnsFromPartIVOfTheTargetTab(doc);
       if (quesAndAnsArr && quesAndAnsArr.length > 0) {
@@ -154,9 +163,25 @@ async function processDocs() {
       statusDiv().innerText = `Failed ${student.docId}: ${err.message}`;
     }
   }
-  statusDiv().innerText = `Finished fetching content from all docs. Starting auto-check...`;
+  if (studentsExerciseList.length) {
+    statusDiv().innerText = `Finished fetching content from all docs. Starting auto-check...`;
+  }
 
   autoCheckExercises(studentsExerciseList);
+}
+
+function getTablesWhichContainStudentExercise(targetTab) {
+  const tableIndex = getTableIndexOfExercise(targetTab.tabProperties.title);
+  if (!tableIndex) return;
+  let exercisePart4 = [];
+  tableIndex.forEach((index) => {
+    exercisePart4.push(
+      ...(targetTab.documentTab.body?.content || []).flatMap(
+        (block) => block.table || [],
+      )[index].tableRows
+    );
+  });
+  return exercisePart4;
 }
 
 async function autoCheckExercises(studentsExerciseList) {
@@ -175,22 +200,22 @@ async function autoCheckExercises(studentsExerciseList) {
 
         const { quesAndAnsArr, student } = stuExercise;
         try {
-          const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
-            method: "POST",
-            headers: { 
-              "Authorization": `Bearer ${currentToken}`,
-              "Content-Type": "application/json",
-              "x-api-key": EXTENSION_SECRET_KEY,
-            },
-            body: JSON.stringify({ items: quesAndAnsArr }),
-          });
+          // const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
+          //   method: "POST",
+          //   headers: {
+          //     "Authorization": `Bearer ${currentToken}`,
+          //     "Content-Type": "application/json",
+          //     "x-api-key": EXTENSION_SECRET_KEY,
+          //   },
+          //   body: JSON.stringify({ items: quesAndAnsArr }),
+          // });
 
-          const result = await gradeResponse.json();
+          // const result = await gradeResponse.json();//todo
+          const result = await contentMain.then((module) => module.fakeApiResponse);//fake data
           if (result.assistantText) {
             await writeToGGDocFile(
               result.assistantText,
-              student.docId,
-              student.tabId,
+              student,
               currentToken,
             );
           }
@@ -201,7 +226,11 @@ async function autoCheckExercises(studentsExerciseList) {
     );
     statusDiv().innerText += `\n Complete handling ${chunk.length} doc, continue...`;
   }
-  alert(`Đã chấm bài xong, bạn hãy review lại kết quả nhé!`);
+  // Play success sound todo
+  // const soundUrl = chrome.runtime.getURL("assets/successful_sound.mp3");
+  // const sound = new Audio(soundUrl);
+  // await sound.play().catch((err) => console.error("Error playing sound:", err));
+  // alert(`Đã chấm bài xong, bạn hãy review lại kết quả nhé!`);
   statusDiv().innerText = "Processing complete!";
 }
 
@@ -359,7 +388,8 @@ document.getElementById("logoutBtn").onclick = () => {
 const TAB_NAME_LIST = [
   { tableIndex: [5], tabName: "BUỔI 02" },
   { tableIndex: [5], tabName: "BUỔI 03" },
-  { tableIndex: [5, 6, 7, 8, 9], tabName: "BUỔI 04" },
+  // { tableIndex: [5, 6, 7, 8, 9], tabName: "BUỔI 04" }, //only 5 6 7 8
+  { tableIndex: [5, 6, 7, 8], tabName: "BUỔI 04" }, //only 5 6 7 8
   { tableIndex: [5, 6, 7], tabName: "BUỔI 05" },
   { tableIndex: [7, 8, 9], tabName: "BUỔI 09" },
   { tableIndex: [7], tabName: "BUỔI 10" },
@@ -487,24 +517,29 @@ function getQuesAndAnsForNormalLession(exercisePart4) {
           let question = qnaChild.find((qa) =>
             startsWithNumberDot(qa.textRun.content),
           );
+          if (question) {
+            qnaObj.question = question.textRun.content;
+            continue;
+          }
           let answer = qnaChild.find((qa) =>
             startsWithArrow(qa.textRun.content),
           );
-          if (question) {
-            qnaObj.question = question.textRun.content;
-          }
           if (answer) {
-            qnaObj.answer = answer.textRun.content;
+            qnaObj.answer = qnaChild.map(ans => ans.textRun.content).join('');
           }
-          if (question) {
+          if (qnaObj.question) {
             quesAndAnsArrPartIV.push(qnaObj);
           }
         }
       }
     }
   }
+  //Check if student did exercisets in part IV or not
+  if (quesAndAnsArrPartIV.some(qna => !!qna.answer)) {
+    return quesAndAnsArrPartIV;
+  }
 
-  return quesAndAnsArrPartIV;
+  return [];
 }
 
 function isSpecialLesson(tabTitle) {
@@ -563,34 +598,25 @@ function getQesAndAnsFromPartIVOfTheTargetTab(targetTab) {
 //   }
 // }
 
+
+
 /**
- * Processes the AI response and updates the specific Google Doc and Tab.
- * @param {string} agentResponse - The raw text response from the OpenAI Assistant.
- * @param {string} DOC_ID - The unique ID of the Google Document.
- * @param {string} TAB_ID - The specific Tab ID (if applicable).
- * @param {string} accessToken - The Google OAuth2 access token.
+ * Cập nhật feedback vào đúng cột "Chữa bài" trong bảng dựa trên STT.
  */
-async function writeToGGDocFile(agentResponse, DOC_ID, TAB_ID, accessToken) {
+async function writeToGGDocFile(agentResponse, student, accessToken) {
+  const DOC_ID = student.docId;
+  const TAB_ID = student.tabId;
+  const exercise = student.exercise;
   try {
-    // 1. Clean the response by removing AI source citations (e.g., 【4:0†source】)
-    // const cleanResponse = agentResponse.replace(/【.*?】/g, "");
+    // 1. Parse dữ liệu từ AI như cũ
     const responseLines = agentResponse.split("\n");
     const gradingResults = [];
 
-    // 2. Parse the Markdown table rows dynamically
     for (const line of responseLines) {
-      // Look for lines containing the pipe character (|) excluding table separators (---)
       if (line.includes("|") && !line.includes("---")) {
-        // Remove leading and trailing pipes, then split into cells
         const cleanLine = line.trim().replace(/^\||\|$/g, "");
         const columns = cleanLine.split("|").map((col) => col.trim());
-        // Ensure the row has enough columns (Index, Content, Student Answer, AI Feedback) and
-        // Check if questionIndex property is either empty (for sub-questions) or a number (for main questions)
-        if (
-          columns.length >= 4 &&
-          (columns[0] === "" || /^\d+$/.test(columns[0]))
-        ) {
-          //column[0] is either question index (1, 3, 4, 5,...) or empty (for sub-questions)
+        if (columns.length >= 4 && (columns[0] === "" || /^\d+$/.test(columns[0]))) {
           gradingResults.push({
             questionIndex: columns[0],
             aiFeedback: columns[3],
@@ -599,99 +625,98 @@ async function writeToGGDocFile(agentResponse, DOC_ID, TAB_ID, accessToken) {
       }
     }
 
+    if (gradingResults.length === 0) return;
+
+    let contentContainer = getTablesWhichContainStudentExercise(exercise);
     const requests = [];
 
-    // 3. Build the batchUpdate request array
-    for (let [index, item] of gradingResults.entries()) {
-      // If the AI marks it correct (e.g., with a checkmark), we leave the text empty or skip
-      let feedbackText = containsCorrectMark(item.aiFeedback)
-        ? ""
-        : item.aiFeedback;
+    // 3. Duyệt qua từng kết quả chấm bài để tìm ô tương ứng trong Doc
+    let i = 0;
+    for (let item of gradingResults) {
+      // if (!item.questionIndex) continue; // Bỏ qua câu phụ nếu không có logic gộp
 
-      // Append a congratulatory message only to the very last processed item
-      if (index === gradingResults.length - 1) {
-        feedbackText = feedbackText ? (feedbackText += "\n") : "";
-        feedbackText +=
-          "Các câu còn lại đúng rồi em nha! Tiếp tục cố gắng và cẩn thận thế này nhé em! 💯🔥";
+      let feedbackText = containsCorrectMark(item.aiFeedback) ? "✅ Đúng" : item.aiFeedback;
+      let targetStartIndex = -1;
+
+      for (let j = i; j <= contentContainer.length; j++) {
+        const row = contentContainer[j];
+        // if (element.table) {
+        // for (const row of element.table.tableRows) {
+        // Lấy text ở cột 1 (STT) để so sánh
+        const firstCellText = row.tableCells[0].content
+          .map(p => p.paragraph.elements.map(e => e.textRun?.content || "").join(""))
+          .join("").trim();
+
+        // So khớp số thứ tự (ví dụ "1" hoặc "1.")
+        if (firstCellText === item.questionIndex || firstCellText.startsWith(`${item.questionIndex}.`)) {
+          // Cột "Chữa bài" thường là cột thứ 4 (index 3) hoặc cuối cùng
+          // Dựa trên ảnh của bạn, nó là cột cuối (index 2 hoặc 3 tùy bảng)
+          const cellIndex = row.tableCells.length - 1;
+          const targetCell = row.tableCells[cellIndex];
+
+          targetStartIndex = targetCell.content[0].startIndex;; // +1 để nhảy vào trong ô
+          i = j + 1;
+          break;
+        }
       }
 
-      if (item.questionIndex) {
+      // 4. Tạo request chèn text nếu tìm thấy vị trí
+      if (targetStartIndex !== -1) {
         requests.push({
-          replaceAllText: {
-            containsText: {
-              // Matches the placeholder in the Doc.
-              // Removed the trailing dot for better matching flexibility.
-              text: `Chữa bài câu ${item.questionIndex}.`,
-              matchCase: false,
-            },
-            replaceText: feedbackText,
-            // Only include tabsCriteria if a valid TAB_ID exists to prevent 500 errors
-            ...(TAB_ID ? { tabsCriteria: { tabIds: [TAB_ID] } } : {}),
+          insertText: {
+            location: { index: targetStartIndex },
+            text: feedbackText
           },
         });
       }
-      //Handle sub-question cases: If questionIndex is empty, it means it's a sub-question of the previous question. We will append the feedback to the previous question's feedback.
-      else if (item.questionIndex === "" && feedbackText) {
-        const lastIndex = requests.length - 1;
-        const previousQuestion = gradingResults[index - 1];
-        feedbackText = requests[lastIndex].replaceAllText.replaceText
-          ? requests[lastIndex].replaceAllText.replaceText +
-            "\n\n" +
-            feedbackText
-          : feedbackText;
-        // Update the previous request to include this feedback as well
-        requests[lastIndex] = {
-          replaceAllText: {
-            containsText: {
-              // Matches the placeholder in the Doc.
-              // Removed the trailing dot for better matching flexibility.
-              text: `Chữa bài câu ${previousQuestion.questionIndex}.`,
-              matchCase: false,
-            },
-            replaceText: feedbackText,
-            // Only include tabsCriteria if a valid TAB_ID exists to prevent 500 errors
-            ...(TAB_ID ? { tabsCriteria: { tabIds: [TAB_ID] } } : {}),
+    }
+
+    // 5. Gửi batchUpdate
+    if (requests.length > 0) {
+      // Trước khi gửi đi, hãy sort để chèn từ cuối tài liệu lên đầu
+      requests.sort((a, b) => b.insertText.location.index - a.insertText.location.index);
+      // requests.push(addTeacherFeedback(requests, TAB_ID));
+
+      const updateResponse = await fetch(
+        `https://docs.googleapis.com/v1/documents/${DOC_ID}:batchUpdate`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+            'x-goog-user-project': project_number
           },
-        };
+          body: JSON.stringify({ requests }),
+        }
+      );
+
+      if (!updateResponse.ok) {
+        throw new Error("Lỗi cập nhật Google Doc");
       }
+      console.log("Đã cập nhật bảng thành công!");
     }
 
-    // 4. Handle empty request cases
-    if (requests.length === 0) {
-      console.warn(
-        "No valid grading data could be parsed from the AI response.",
-      );
-      return;
-    }
-
-    // 5. Execute the batchUpdate call to Google Docs API
-    const updateResponse = await fetch(
-      `https://docs.googleapis.com/v1/documents/${DOC_ID}:batchUpdate`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ requests }),
-      },
-    );
-
-    // 6. Error handling for the API response
-    if (!updateResponse.ok) {
-      const errorDetail = await updateResponse.json();
-      console.error("Google Docs API Request Failed:", errorDetail);
-      throw new Error(
-        `Google API Error: ${updateResponse.status} - ${JSON.stringify(errorDetail)}`,
-      );
-    }
-
-    console.log(`Document [${DOC_ID}] updated successfully.`);
   } catch (error) {
-    // Log the full error for debugging; do not leave the catch block empty
     console.error(error);
-    alert(error.message);
+    alert("Có lỗi xảy ra: " + error.message);
   }
+}
+
+
+function addTeacherFeedback(requests, TAB_ID) {
+  const teacherFeedback = "Nhận xét chung của Giáo viên: Các câu còn lại đúng rồi em nha! Tiếp tục cố gắng và cẩn thận thế này nhé em! 💯🔥";
+  const feedBackRequest = {
+    replaceAllText: {
+      containsText: {
+        text: `Nhận xét chung của Giáo viên: `,
+        matchCase: false,
+      },
+      replaceText: teacherFeedback,
+    },
+    // Only include tabsCriteria if a valid TAB_ID exists to prevent 500 errors
+    ...(TAB_ID ? { tabsCriteria: { tabIds: [TAB_ID] } } : {}),
+  };
+  return feedBackRequest;
 }
 
 function startsWithNumberDot(sentence) {
@@ -725,4 +750,67 @@ function parseDocLinks(text) {
   });
 
   return docObjects;
+}
+
+
+// Cách dùng:
+// writeToSpecificCell(DOC_ID, "2", "Câu 2 chưa đúng", accessToken);
+// writeToSpecificCell(DOC_ID, "18", "Câu 18 đúng rồi", accessToken);
+async function writeToSpecificCell(DOC_ID, questionNumber, feedbackText, accessToken) {
+  try {
+    // Bước 1: Lấy cấu trúc document
+    const docResponse = await fetch(`https://docs.googleapis.com/v1/documents/${DOC_ID}`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const doc = await docResponse.json();
+
+    let writeIndex = -1;
+
+    // Bước 2: Tìm bảng và hàng tương ứng
+    for (const content of doc.body.content) {
+      if (content.table) {
+        for (const row of content.table.tableRows) {
+          // Ô đầu tiên (index 0) thường chứa số thứ tự "1.", "2."...
+          const firstCellText = row.tableCells[0].content
+            .map(c => c.paragraph.elements.map(e => e.textRun.content).join(''))
+            .join('').trim();
+
+          // Kiểm tra xem hàng này có phải là câu mình cần không (ví dụ: "2.")
+          if (firstCellText.startsWith(`${questionNumber}.`)) {
+            // Lấy ô cuối cùng (Cột "Chữa bài" - index 2)
+            const targetCell = row.tableCells[2];
+            // Vị trí bắt đầu để ghi vào ô này (trừ đi 1 để nằm trong ô)
+            writeIndex = targetCell.startIndex + 1;
+            break;
+          }
+        }
+      }
+    }
+
+    if (writeIndex === -1) {
+      console.warn(`Không tìm thấy hàng cho câu số ${questionNumber}`);
+      return;
+    }
+
+    // Bước 3: Gửi yêu cầu chèn text
+    const requests = [{
+      insertText: {
+        location: { index: writeIndex },
+        text: feedbackText
+      }
+    }];
+
+    await fetch(`https://docs.googleapis.com/v1/documents/${DOC_ID}:batchUpdate`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ requests }),
+    });
+
+    console.log(`Đã ghi nội dung vào câu ${questionNumber}`);
+  } catch (error) {
+    console.error("Lỗi:", error);
+  }
 }
