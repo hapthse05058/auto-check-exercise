@@ -20,6 +20,7 @@ var container = document.getElementById("container");
 const PLEASE_LOGIN_MESSAGE = "Please login to use the extension...";
 const READY_TO_PROCESS_MESSAGE = "Ready to process...";
 const EXTENSION_SECRET_KEY = "SuperSecretKey_hongHa_321";
+const EMPTY_ANSWER = ["→ \n", "", "→"];
 
 function handleAfterLogout() {
   statusDiv().innerText = PLEASE_LOGIN_MESSAGE;
@@ -200,18 +201,18 @@ async function autoCheckExercises(studentsExerciseList) {
 
         const { quesAndAnsArr, student } = stuExercise;
         try {
-          // const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
-          //   method: "POST",
-          //   headers: {
-          //     "Authorization": `Bearer ${currentToken}`,
-          //     "Content-Type": "application/json",
-          //     "x-api-key": EXTENSION_SECRET_KEY,
-          //   },
-          //   body: JSON.stringify({ items: quesAndAnsArr }),
-          // });
+          const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${currentToken}`,
+              "Content-Type": "application/json",
+              "x-api-key": EXTENSION_SECRET_KEY,
+            },
+            body: JSON.stringify({ items: quesAndAnsArr }),
+          });
 
-          // const result = await gradeResponse.json();//todo
-          const result = await contentMain.then((module) => module.fakeApiResponse);//fake data
+          const result = await gradeResponse.json();//todo
+          // const result = await contentMain.then((module) => module.fakeApiResponse);//fake data
           if (result.assistantText) {
             await writeToGGDocFile(
               result.assistantText,
@@ -227,11 +228,11 @@ async function autoCheckExercises(studentsExerciseList) {
     statusDiv().innerText += `\n Complete handling ${chunk.length} doc, continue...`;
   }
   // Play success sound todo
-  // const soundUrl = chrome.runtime.getURL("assets/successful_sound.mp3");
-  // const sound = new Audio(soundUrl);
-  // await sound.play().catch((err) => console.error("Error playing sound:", err));
+  const soundUrl = chrome.runtime.getURL("assets/successful_sound.mp3");
+  const sound = new Audio(soundUrl);
+  await sound.play().catch((err) => console.error("Error playing sound:", err));
   // alert(`Đã chấm bài xong, bạn hãy review lại kết quả nhé!`);
-  statusDiv().innerText = "Processing complete!";
+  statusDiv().innerText = `Processing complete!\nGrading student's exercises completed! You can review the result!!`;
 }
 
 document.getElementById("loginBtn").onclick = () => {
@@ -568,114 +569,71 @@ function getQesAndAnsFromPartIVOfTheTargetTab(targetTab) {
     quesAndAnsArrPartIV = getQuesAndAnsForNormalLession(exercisePart4);
   }
 
-  return quesAndAnsArrPartIV;
+  //Filter to get elements which contain answer
+  let finalArr = quesAndAnsArrPartIV.filter(item => {
+    if (!EMPTY_ANSWER.includes(item.answer.trim())) {
+      return item;
+    }
+  });
+  return finalArr;
 }
-
-// async function sendStudentExerciseToAIAgentoGetAnswer(
-//   quesAndAnsArrPartIV,
-//   redirectUri,
-// ) {
-//   try {
-//     const response = await fetch(`${domain}/grade`, {
-//       method: "POST",
-//       headers: {
-//         "Authorization": `Bearer ${auth}`,
-//         "Content-Type": "application/json",
-//         "x-api-key": "MA_BI_MAT_CUA_BAN", // Vẫn giữ lớp bảo vệ này
-//       },
-//       body: JSON.stringify({
-//         items: quesAndAnsArrPartIV,
-//         redirectUri: redirectUri,
-//       }),
-//     });
-//     const text = response.text();
-//     if (!response.ok) {
-//       throw new Error(`Grade API error ${response.status}: ${text}`);
-//     }
-//     return text;
-//   } catch (err) {
-//     alert("Error fetching document: " + err.message);
-//   }
-// }
-
-
 
 /**
  * Cập nhật feedback vào đúng cột "Chữa bài" trong bảng dựa trên STT.
  */
 async function writeToGGDocFile(agentResponse, student, accessToken) {
-  const DOC_ID = student.docId;
-  const TAB_ID = student.tabId;
-  const exercise = student.exercise;
+  const { docId: DOC_ID, tabId: TAB_ID, exercise } = student;
+
   try {
-    // 1. Parse dữ liệu từ AI như cũ
-    const responseLines = agentResponse.split("\n");
-    const gradingResults = [];
-
-    for (const line of responseLines) {
-      if (line.includes("|") && !line.includes("---")) {
-        const cleanLine = line.trim().replace(/^\||\|$/g, "");
-        const columns = cleanLine.split("|").map((col) => col.trim());
-        if (columns.length >= 4 && (columns[0] === "" || /^\d+$/.test(columns[0]))) {
-          gradingResults.push({
-            questionIndex: columns[0],
-            aiFeedback: columns[3],
-          });
-        }
-      }
-    }
-
+    // 1. Parse dữ liệu
+    const gradingResults = parseAiResponse(agentResponse);
     if (gradingResults.length === 0) return;
 
+    // 2. Lấy container bảng
     let contentContainer = getTablesWhichContainStudentExercise(exercise);
-    const requests = [];
+    // const allRequests = [];
+    const groupedRequests = []; // Mảng chứa các nhóm request theo từng câu
 
-    // 3. Duyệt qua từng kết quả chấm bài để tìm ô tương ứng trong Doc
-    let i = 0;
+    // 3. Duyệt kết quả chấm bài
+    let currentRowPointer = 0;
     for (let item of gradingResults) {
-      // if (!item.questionIndex) continue; // Bỏ qua câu phụ nếu không có logic gộp
-
       let feedbackText = containsCorrectMark(item.aiFeedback) ? "✅ Đúng" : item.aiFeedback;
       let targetStartIndex = -1;
 
-      for (let j = i; j <= contentContainer.length; j++) {
+      for (let j = currentRowPointer; j < contentContainer.length; j++) {
         const row = contentContainer[j];
-        // if (element.table) {
-        // for (const row of element.table.tableRows) {
-        // Lấy text ở cột 1 (STT) để so sánh
         const firstCellText = row.tableCells[0].content
           .map(p => p.paragraph.elements.map(e => e.textRun?.content || "").join(""))
           .join("").trim();
 
-        // So khớp số thứ tự (ví dụ "1" hoặc "1.")
         if (firstCellText === item.questionIndex || firstCellText.startsWith(`${item.questionIndex}.`)) {
-          // Cột "Chữa bài" thường là cột thứ 4 (index 3) hoặc cuối cùng
-          // Dựa trên ảnh của bạn, nó là cột cuối (index 2 hoặc 3 tùy bảng)
           const cellIndex = row.tableCells.length - 1;
           const targetCell = row.tableCells[cellIndex];
 
-          targetStartIndex = targetCell.content[0].startIndex;; // +1 để nhảy vào trong ô
-          i = j + 1;
+          // Lấy startIndex an toàn (bên trong đoạn văn đầu tiên của ô)
+          targetStartIndex = targetCell.content[0].startIndex;
+          currentRowPointer = j + 1;
           break;
         }
       }
 
-      // 4. Tạo request chèn text nếu tìm thấy vị trí
+      // 4. Tạo Styled Requests (Xử lý in đậm **)
       if (targetStartIndex !== -1) {
-        requests.push({
-          insertText: {
-            location: { index: targetStartIndex },
-            text: feedbackText
-          },
+        const styledReqs = createStyledTextRequests(feedbackText, targetStartIndex, TAB_ID);
+        groupedRequests.push({
+          startIndex: targetStartIndex,
+          subRequests: styledReqs
         });
       }
     }
 
+    // 2. Sắp xếp các NHÓM theo thứ tự Index giảm dần
+    groupedRequests.sort((a, b) => b.startIndex - a.startIndex);
+
+    // 3. Làm phẳng mảng để gửi đi
+    const finalRequests = groupedRequests.flatMap(group => group.subRequests);
     // 5. Gửi batchUpdate
-    if (requests.length > 0) {
-      // Trước khi gửi đi, hãy sort để chèn từ cuối tài liệu lên đầu
-      requests.sort((a, b) => b.insertText.location.index - a.insertText.location.index);
-      // requests.push(addTeacherFeedback(requests, TAB_ID));
+    if (finalRequests.length > 0) {
 
       const updateResponse = await fetch(
         `https://docs.googleapis.com/v1/documents/${DOC_ID}:batchUpdate`,
@@ -684,22 +642,166 @@ async function writeToGGDocFile(agentResponse, student, accessToken) {
           headers: {
             Authorization: `Bearer ${accessToken}`,
             "Content-Type": "application/json",
-            'x-goog-user-project': project_number
+            'x-goog-user-project': project_number // Hãy đảm bảo biến này đã được định nghĩa
           },
-          body: JSON.stringify({ requests }),
+          body: JSON.stringify({ requests: finalRequests }),
         }
       );
 
       if (!updateResponse.ok) {
+        const err = await updateResponse.json();
+        console.error("Detail:", err);
         throw new Error("Lỗi cập nhật Google Doc");
       }
-      console.log("Đã cập nhật bảng thành công!");
+      console.log("Đã cập nhật bảng thành công với format in đậm!");
     }
 
   } catch (error) {
     console.error(error);
     alert("Có lỗi xảy ra: " + error.message);
   }
+}
+
+function parseAiResponse(agentResponse) {
+  const responseLines = agentResponse.split("\n");
+  const results = [];
+  for (const line of responseLines) {
+    if (line.includes("|") && !line.includes("---")) {
+      const cleanLine = line.trim().replace(/^\||\|$/g, "");
+      const columns = cleanLine.split("|").map((col) => col.trim());
+      if (columns.length >= 4 && (columns[0] === "" || /^\d+$/.test(columns[0]))) {
+        results.push({
+          questionIndex: columns[0],
+          aiFeedback: columns[3],
+        });
+      }
+    }
+  }
+  return results;
+}
+
+/**
+ * Tách text theo format **bold** và tạo danh sách các request tương ứng.
+ * currentOffset giúp theo dõi vị trí chèn liên tiếp trong cùng một ô.
+ */
+function createStyledTextRequests(text, baseIndex, TAB_ID) {
+  const requests = [];
+  const boldRegex = /\*\*(.*?)\*\*/g;
+  let lastIndex = 0;
+  let match;
+  let currentOffset = 0;
+
+  while ((match = boldRegex.exec(text)) !== null) {
+    const plainTextBefore = text.substring(lastIndex, match.index);
+    const boldText = match[1];
+
+    // 1. Chèn đoạn text thường phía trước
+    if (plainTextBefore) {
+      requests.push({
+        insertText: { location: { index: baseIndex + currentOffset }, text: plainTextBefore },
+      });
+      currentOffset += plainTextBefore.length;
+    }
+
+    // 2. Chèn đoạn text cần in đậm
+    requests.push({
+      insertText: { location: { index: baseIndex + currentOffset }, text: boldText },
+    });
+
+    // 3. Lệnh in đậm cho đoạn vừa chèn
+    requests.push({
+      updateTextStyle: {
+        range: {
+          startIndex: baseIndex + currentOffset,
+          endIndex: baseIndex + currentOffset + boldText.length
+        },
+        textStyle: { bold: true },
+        fields: "bold"
+      }
+    });
+
+    currentOffset += boldText.length;
+    lastIndex = boldRegex.lastIndex;
+  }
+
+  // Chèn nốt phần text còn lại sau dấu ** cuối cùng
+  const remainingText = text.substring(lastIndex);
+  if (remainingText) {
+    requests.push({
+      insertText: { location: { index: baseIndex + currentOffset }, text: remainingText },
+    });
+  }
+
+  return requests;
+}
+
+/**
+ * Tách text theo format **bold** và tạo danh sách các request tương ứng.
+ * Đảm bảo chỉ in đậm nội dung bên trong cặp dấu **.
+ */
+function createStyledTextRequests(text, baseIndex) {
+  const requests = [];
+  const boldRegex = /\*\*(.*?)\*\*/g;
+  let lastIndex = 0;
+  let match;
+  let currentOffset = 0;
+
+  while ((match = boldRegex.exec(text)) !== null) {
+    const plainTextBefore = text.substring(lastIndex, match.index);
+    const boldText = match[1];
+
+    // 1. Chèn đoạn text thường phía trước và đảm bảo KHÔNG in đậm
+    if (plainTextBefore) {
+      const start = baseIndex + currentOffset;
+      requests.push({
+        insertText: { location: { index: start }, text: plainTextBefore }
+      });
+      requests.push({
+        updateTextStyle: {
+          range: { startIndex: start, endIndex: start + plainTextBefore.length },
+          textStyle: { bold: false },
+          fields: "bold"
+        },
+      });
+      currentOffset += plainTextBefore.length;
+    }
+
+    // 2. Chèn đoạn text cần in đậm
+    const boldStart = baseIndex + currentOffset;
+    requests.push({
+      insertText: { location: { index: boldStart }, text: boldText },
+    });
+
+    // 3. Lệnh in đậm CHỈ cho đoạn boldText
+    requests.push({
+      updateTextStyle: {
+        range: { startIndex: boldStart, endIndex: boldStart + boldText.length },
+        textStyle: { bold: true },
+        fields: "bold"
+      },
+    });
+
+    currentOffset += boldText.length;
+    lastIndex = boldRegex.lastIndex;
+  }
+
+  // 4. Chèn nốt phần text còn lại và RESET in đậm về false
+  const remainingText = text.substring(lastIndex);
+  if (remainingText) {
+    const finalStart = baseIndex + currentOffset;
+    requests.push({
+      insertText: { location: { index: finalStart }, text: remainingText },
+    });
+    requests.push({
+      updateTextStyle: {
+        range: { startIndex: finalStart, endIndex: finalStart + remainingText.length },
+        textStyle: { bold: false },
+        fields: "bold"
+      },
+    });
+  }
+
+  return requests;
 }
 
 
