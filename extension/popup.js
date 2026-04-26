@@ -746,45 +746,6 @@ function setStyleForTeacherFeedBack(baseIndex, feedbackText) {
       text: feedbackText
     },
   });
-  // 2. Clear Paragraph Shading (The "Heavy Duty" Reset)
-  // This removes background colors applied to the entire block/line
-  // requests.push({
-  //   updateParagraphStyle: {
-  //     range: {
-  //       startIndex: baseIndex,
-  //       endIndex: endIndex
-  //     },
-  //     paragraphStyle: {
-  //       shading: {
-  //         backgroundColor: {} // Empty object resets shading to transparent
-  //       }
-  //     },
-  //     fields: "shading.backgroundColor",
-  //   }
-  // });
-  // 3. Set Text Style (Bold and White Background)
-  // This ensures individual characters don't inherit "highlight" colors
-  // requests.push({
-  //   updateTextStyle: {
-  //     range: {
-  //       startIndex: baseIndex,
-  //       endIndex: endIndex
-  //     },
-  //     textStyle: {
-  //       bold: true,
-  //       backgroundColor: {
-  //         color: {
-  //           rgbColor: {
-  //             red: 1,
-  //             green: 1,
-  //             blue: 1
-  //           }
-  //         }
-  //       }
-  //     },
-  //     fields: "bold,backgroundColor",
-  //   }
-  // });
 
   return requests;
 }
