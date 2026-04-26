@@ -201,28 +201,33 @@ async function autoCheckExercises(studentsExerciseList) {
         const currentToken = await ensureValidToken();
 
         const { quesAndAnsArr, student } = stuExercise;
-        try {
-          const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${currentToken}`,
-              "Content-Type": "application/json",
-              "x-api-key": EXTENSION_SECRET_KEY,
-            },
-            body: JSON.stringify({ items: quesAndAnsArr }),
-          });
+        if (wasExerciseReviewedByAI(student.exercise)) {
+          // alert(`Some student's exercise in your class have been checked!`)
+          statusDiv().innerText += `\n This exercise has been checked: ${student.docId}. Skip checking it again...`;
+        } else {
+          try {
+            const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${currentToken}`,
+                "Content-Type": "application/json",
+                "x-api-key": EXTENSION_SECRET_KEY,
+              },
+              body: JSON.stringify({ items: quesAndAnsArr }),
+            });
 
-          const result = await gradeResponse.json();//todo
-          // const result = await contentMain.then((module) => module.fakeApiResponse);//fake data
-          if (result.assistantText) {
-            await writeToGGDocFile(
-              result.assistantText,
-              student,
-              currentToken,
-            );
+            const result = await gradeResponse.json();//todo
+            // const result = await contentMain.then((module) => module.fakeApiResponse);//fake data
+            if (result.assistantText) {
+              await writeToGGDocFile(
+                result.assistantText,
+                student,
+                currentToken,
+              );
+            }
+          } catch (err) {
+            console.error("AutoCheck Error:", err);
           }
-        } catch (err) {
-          console.error("AutoCheck Error:", err);
         }
       }),
     );
@@ -576,6 +581,30 @@ function getQesAndAnsFromPartIVOfTheTargetTab(targetTab) {
     }
   });
   return finalArr;
+}
+
+function wasExerciseReviewedByAI(exercise) {
+  let contentContainer = getTablesWhichContainStudentExercise(exercise);
+  for (let j = 0; j < contentContainer.length; j++) {
+    if (j > 1) {
+      const row = contentContainer[j];
+      const firstCellText = row.tableCells[0].content
+        .map(p => p.paragraph.elements.map(e => e.textRun?.content || "").join(""))
+        .join("").trim();
+
+      if (firstCellText && startsWithNumberDot(firstCellText)) {
+        const cellIndex = row.tableCells.length - 1;
+        const targetCell = row.tableCells[cellIndex];
+        const targetCellContent = targetCell.content
+          .map(p => p.paragraph.elements.map(e => e.textRun?.content || "").join(""))
+          .join("").trim();
+        if (targetCellContent) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 /**
