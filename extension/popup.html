@@ -13,13 +13,19 @@
         </div>
       </div>
       <div id="container">
+        <select id="classDropdown" class="mb-1">
+          <option value="">Select Class</option>
+        </select>
+        <select id="lessonDropdown" class="mb-1" disabled>
+          <option value="">Select Lesson</option>
+        </select>
         <textarea
           id="docLinks"
           class="mb-1"
           placeholder="Paste Google Doc links here (one per line)..."
           rows="10"
         ></textarea>
-        <button class="mb-1 primary-btn" id="processAllDocs">Process All Documents</button>
+        <button class="mb-1 primary-btn" id="processAllDocs" disabled>Process All Documents</button>
       </div>
       <div id="result"></div>
     </div>

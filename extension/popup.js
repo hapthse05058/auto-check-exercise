@@ -17,11 +17,14 @@ var loginBtn = document.getElementById("loginBtn");
 var logoutBtn = document.getElementById("logoutBtn");
 var processAllDocs = document.getElementById("processAllDocs");
 var container = document.getElementById("container");
+var classDropdown = document.getElementById("classDropdown");
+var lessonDropdown = document.getElementById("lessonDropdown");
 const PLEASE_LOGIN_MESSAGE = "Please login to use the extension...";
 const READY_TO_PROCESS_MESSAGE = "Ready to process...";
 const EXTENSION_SECRET_KEY = "SuperSecretKey_hongHa_321";
 const EMPTY_ANSWER = ["→ \n", "", "→"];
 const IS_CORRECT_ANSWER = "✅ Đúng";
+var lessons = [];
 
 function handleAfterLogout() {
   statusDiv().innerText = PLEASE_LOGIN_MESSAGE;
@@ -35,6 +38,8 @@ function handleAfterLogin() {
   loginBtn.style.display = "none";
   logoutBtn.style.display = "block";
   console.log("Login successful! Token stored.");
+  // Fetch classes after login
+  fetchClasses();
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -49,6 +54,24 @@ document.addEventListener("DOMContentLoaded", async () => {
   } else {
     handleAfterLogout();
   }
+
+  // Add event listeners for dropdowns
+  classDropdown.addEventListener("change", async () => {
+    const classId = classDropdown.value;
+    if (classId) {
+      lessonDropdown.disabled = true;
+      lessonDropdown.innerHTML = '<option value="">Select Lesson</option>';
+      await fetchLessons(classId);
+    } else {
+      lessonDropdown.disabled = true;
+      lessonDropdown.innerHTML = '<option value="">Select Lesson</option>';
+    }
+    checkEnableProcessButton();
+  });
+
+  lessonDropdown.addEventListener("change", () => {
+    checkEnableProcessButton();
+  });
 });
 
 async function ensureValidToken() {
@@ -128,11 +151,107 @@ async function refreshSilentToken() {
   }
 }
 
+async function fetchClasses() {
+  try {
+    const token = await ensureValidToken();
+    const response = await fetch(`${DOMAIN_BE}/classes`, {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "x-api-key": EXTENSION_SECRET_KEY,
+      },
+    });
+    if (!response.ok) throw new Error("Failed to fetch classes");
+    const classes = await response.json();
+    populateClassDropdown(classes);
+  } catch (error) {
+    console.error("Error fetching classes:", error);
+    statusDiv().innerText = "Failed to load classes.";
+  }
+}
+
+function populateClassDropdown(classes) {
+  classDropdown.innerHTML = '<option value="">Select Class</option>';
+  classes.forEach(cls => {
+    const option = document.createElement("option");
+    option.value = cls.id;
+    option.textContent = cls.name;
+    classDropdown.appendChild(option);
+  });
+}
+
+async function fetchLessons(classId) {
+  try {
+    const token = await ensureValidToken();
+    const response = await fetch(`${DOMAIN_BE}/lessons?classId=${classId}`, {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "x-api-key": EXTENSION_SECRET_KEY,
+      },
+    });
+    if (!response.ok) throw new Error("Failed to fetch lessons");
+    lessons = await response.json();
+    populateLessonDropdown(lessons);
+  } catch (error) {
+    console.error("Error fetching lessons:", error);
+    statusDiv().innerText = "Failed to load lessons.";
+  }
+}
+
+function getLessonName(lessonId) {
+  return lessons.find(item => item.id === lessonId)?.name;
+}
+
+async function fetchStudents(classId) {
+  try {
+    const token = await ensureValidToken();
+    const response = await fetch(`${DOMAIN_BE}/students?classId=${classId}`, {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "x-api-key": EXTENSION_SECRET_KEY,
+      },
+    });
+    if (!response.ok) throw new Error("Failed to fetch students");
+    const students = await response.json();
+    const links = [];
+    students.forEach(student => {
+      const match = student.ggDocLink.match(/\/document\/d\/([a-zA-Z0-9-_]+)/);
+      if (match) {
+        links.push({ docId: match[1], tabId: "t.0" });
+      }
+    });
+    return links;
+  } catch (error) {
+    console.error("Error fetching students:", error);
+    throw error;
+  }
+}
+
+function populateLessonDropdown(lessons) {
+  lessonDropdown.innerHTML = '<option value="">Select Lesson</option>';
+  lessons.forEach(lesson => {
+    const option = document.createElement("option");
+    option.value = lesson.id;
+    option.textContent = lesson.name;
+    lessonDropdown.appendChild(option);
+  });
+  lessonDropdown.disabled = false;
+}
+
+function checkEnableProcessButton() {
+  const classSelected = classDropdown.value;
+  const lessonSelected = lessonDropdown.value;
+  processAllDocs.disabled = !(classSelected && lessonSelected);
+}
+
 //Get content by doc id and tab id
 async function processDocs() {
-  const links = parseDocLinks(document.getElementById("docLinks").value);
+  const links = await fetchStudents(classDropdown.value);
+  // const links = parseDocLinks(document.getElementById("docLinks").value);
   if (!links.length) {
-    alert("Please enter at least one valid Google Doc link.");
+    alert("No student documents found for this class.");
     return;
   }
 
@@ -147,11 +266,11 @@ async function processDocs() {
 
       const doc = await getTabContent(
         student.docId,
-        student.tabId,
         accessToken,
       );
       if (!doc) continue;
       student.exercise = doc;
+      student.tabId = doc.tabProperties.tabId;
 
       let quesAndAnsArr = getQesAndAnsFromPartIVOfTheTargetTab(doc);
       if (quesAndAnsArr && quesAndAnsArr.length > 0) {
@@ -206,18 +325,18 @@ async function autoCheckExercises(studentsExerciseList) {
           statusDiv().innerText += `\n This exercise has been checked: ${student.docId}. Skip checking it again...`;
         } else {
           try {
-            // const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
-            //   method: "POST",
-            //   headers: {
-            //     "Authorization": `Bearer ${currentToken}`,
-            //     "Content-Type": "application/json",
-            //     "x-api-key": EXTENSION_SECRET_KEY,
-            //   },
-            //   body: JSON.stringify({ items: quesAndAnsArr }),
-            // });
+            const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${currentToken}`,
+                "Content-Type": "application/json",
+                "x-api-key": EXTENSION_SECRET_KEY,
+              },
+              body: JSON.stringify({ items: quesAndAnsArr }),
+            });
 
-            // const result = await gradeResponse.json();//todo
-            const result = await contentMain.then((module) => module.fakeApiResponse);//fake data
+            const result = await gradeResponse.json();//todo
+            // const result = await contentMain.then((module) => module.fakeApiResponse);//fake data
             if (result.assistantText) {
               await writeToGGDocFile(
                 result.assistantText,
@@ -290,18 +409,6 @@ document.getElementById("loginBtn").onclick = () => {
   );
 };
 
-function parseDocLinks(text) {
-  const links = [];
-  const lines = text.split("\n");
-  lines.forEach((line) => {
-    const match = line.match(/\/document\/d\/([a-zA-Z0-9-_]+)/);
-    if (match) {
-      links.push({ docId: match[1], tabId: "t.0" });
-    }
-  });
-  return links;
-}
-
 function getStoredTokens() {
   return new Promise((resolve) => {
     chrome.storage.local.get(["access_token"], (result) => {
@@ -322,9 +429,9 @@ function getStoredTokens() {
  * @param {string} tabId - The ID of the specific tab.
  * @param {string} accessToken - Your OAuth2 access token.
  */
-async function getTabContent(docId, tabId, accessToken) {
+async function getTabContent(docId, accessToken) {
   const url = `https://docs.googleapis.com/v1/documents/${docId}?includeTabsContent=true`;
-
+  const tabTitle = getLessonName(lessonDropdown.value);
   try {
     const response = await fetch(url, {
       method: "GET",
@@ -341,9 +448,9 @@ async function getTabContent(docId, tabId, accessToken) {
     const data = await response.json();
 
     // 1. Find the tab recursively
-    const targetTab = findTabById(data.tabs, tabId);
+    const targetTab = findTabByTitle(data.tabs, tabTitle);
     if (!targetTab || !targetTab.documentTab) {
-      throw new Error(`Tab with ID ${tabId} not found.`);
+      throw new Error(`Tab with title ${tabTitle} not found.`);
     }
 
     // 2. Parse and return the text
@@ -355,11 +462,11 @@ async function getTabContent(docId, tabId, accessToken) {
 }
 
 // Helper functions (same logic as before)
-function findTabById(tabs, id) {
+function findTabByTitle(tabs, title) {
   for (const tab of tabs) {
-    if (tab.tabProperties.tabId === id) return tab;
+    if (tab.tabProperties.title === title) return tab;
     if (tab.childTabs) {
-      const found = findTabById(tab.childTabs, id);
+      const found = findTabByTitle(tab.childTabs, title);
       if (found) return found;
     }
   }
@@ -576,7 +683,7 @@ function getQesAndAnsFromPartIVOfTheTargetTab(targetTab) {
 
   //Filter to get elements which contain answer
   let finalArr = quesAndAnsArrPartIV.filter(item => {
-    if (!EMPTY_ANSWER.includes(item.answer.trim())) {
+    if (!EMPTY_ANSWER.includes(item.answer?.trim())) {
       return item;
     }
   });
@@ -684,7 +791,9 @@ async function writeToGGDocFile(agentResponse, student, accessToken) {
     groupedRequests.sort((a, b) => b.startIndex - a.startIndex);
 
     // 3. Làm phẳng mảng để gửi đi
-    const finalRequests = groupedRequests.flatMap(group => group.subRequests);
+    let finalRequests = groupedRequests.flatMap(group => group.subRequests);
+    // Sắp xếp lại để tránh lỗi index khi chèn nhiều đoạn
+    // finalRequests.sort((a, b) => b.insertText?.location.index - a.insertText?.location.index);
     // 5. Gửi batchUpdate
     if (finalRequests.length > 0) {
 
