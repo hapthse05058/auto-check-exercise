@@ -193,9 +193,37 @@ async function fetchLessons(classId) {
     if (!response.ok) throw new Error("Failed to fetch lessons");
     lessons = await response.json();
     populateLessonDropdown(lessons);
+
+    const currentLesson = await fetchCurrentLesson(classId);
+    if (currentLesson && lessons.some((lesson) => lesson.id === currentLesson)) {
+      lessonDropdown.value = currentLesson;
+    }
+    checkEnableProcessButton();
   } catch (error) {
     console.error("Error fetching lessons:", error);
     statusDiv().innerText = "Failed to load lessons.";
+  }
+}
+
+async function fetchCurrentLesson(classId) {
+  try {
+    const token = await ensureValidToken();
+    const response = await fetch(`${DOMAIN_BE}/current-lesson?classId=${classId}`, {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "x-api-key": EXTENSION_SECRET_KEY,
+      },
+    });
+    if (!response.ok) {
+      console.warn("No current lesson available or failed to fetch current lesson");
+      return null;
+    }
+    const data = await response.json();
+    return data.currentLesson || null;
+  } catch (error) {
+    console.error("Error fetching current lesson:", error);
+    return null;
   }
 }
 
