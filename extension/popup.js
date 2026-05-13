@@ -206,18 +206,18 @@ async function autoCheckExercises(studentsExerciseList) {
           statusDiv().innerText += `\n This exercise has been checked: ${student.docId}. Skip checking it again...`;
         } else {
           try {
-            const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
-              method: "POST",
-              headers: {
-                "Authorization": `Bearer ${currentToken}`,
-                "Content-Type": "application/json",
-                "x-api-key": EXTENSION_SECRET_KEY,
-              },
-              body: JSON.stringify({ items: quesAndAnsArr }),
-            });
+            // const gradeResponse = await fetch(`${DOMAIN_BE}/grade`, {
+            //   method: "POST",
+            //   headers: {
+            //     "Authorization": `Bearer ${currentToken}`,
+            //     "Content-Type": "application/json",
+            //     "x-api-key": EXTENSION_SECRET_KEY,
+            //   },
+            //   body: JSON.stringify({ items: quesAndAnsArr }),
+            // });
 
-            const result = await gradeResponse.json();//todo
-            // const result = await contentMain.then((module) => module.fakeApiResponse);//fake data
+            // const result = await gradeResponse.json();//todo
+            const result = await contentMain.then((module) => module.fakeApiResponse);//fake data
             if (result.assistantText) {
               await writeToGGDocFile(
                 result.assistantText,
@@ -611,7 +611,9 @@ function wasExerciseReviewedByAI(exercise) {
  * Cập nhật feedback vào đúng cột "Chữa bài" trong bảng dựa trên STT.
  */
 async function writeToGGDocFile(agentResponse, student, accessToken) {
-  const { docId: DOC_ID, tabId: TAB_ID, exercise } = student;
+  const TAB_ID = student.tabId;
+  const DOC_ID = student.docId;
+  const exercise = student.exercise;
 
   try {
     // 1. Parse dữ liệu
@@ -642,7 +644,7 @@ async function writeToGGDocFile(agentResponse, student, accessToken) {
             feedbackText = generateOverallFeedback(gradingResults);
             // 4. Tạo Styled Requests (Xử lý in đậm **)
             if (targetStartIndex !== -1) {
-              const styledReqs = setStyleForTeacherFeedBack(targetStartIndex, feedbackText);
+              const styledReqs = setStyleForTeacherFeedBack(targetStartIndex, feedbackText, TAB_ID);
               groupedRequests.push({
                 startIndex: targetStartIndex,
                 subRequests: styledReqs
@@ -670,7 +672,7 @@ async function writeToGGDocFile(agentResponse, student, accessToken) {
 
       // 4. Tạo Styled Requests (Xử lý in đậm **)
       if (targetStartIndex !== -1) {
-        const styledReqs = createStyledTextRequests(feedbackText, targetStartIndex);
+        const styledReqs = createStyledTextRequests(feedbackText, targetStartIndex, TAB_ID);
         groupedRequests.push({
           startIndex: targetStartIndex,
           subRequests: styledReqs
@@ -765,13 +767,13 @@ function parseAiResponse(agentResponse) {
   return results;
 }
 
-function setStyleForTeacherFeedBack(baseIndex, feedbackText) {
+function setStyleForTeacherFeedBack(baseIndex, feedbackText, tabId) {
   let requests = [];
   const endIndex = baseIndex + feedbackText.length;
   // 1. Insert the feedback text first
   requests.push({
     insertText: {
-      location: { index: baseIndex },
+      location: { index: baseIndex, tabId: tabId },
       text: feedbackText
     },
   });
@@ -782,7 +784,7 @@ function setStyleForTeacherFeedBack(baseIndex, feedbackText) {
  * Tách text theo format **bold** và tạo danh sách các request tương ứng.
  * Đảm bảo chỉ in đậm nội dung bên trong cặp dấu **.
  */
-function createStyledTextRequests(text, baseIndex) {
+function createStyledTextRequests(text, baseIndex, tabId) {
   const requests = [];
   const boldRegex = /\*\*(.*?)\*\*/g;
   let lastIndex = 0;
@@ -797,11 +799,11 @@ function createStyledTextRequests(text, baseIndex) {
     if (plainTextBefore) {
       const start = baseIndex + currentOffset;
       requests.push({
-        insertText: { location: { index: start }, text: plainTextBefore }
+        insertText: { location: { index: start, tabId: tabId }, text: plainTextBefore }
       });
       requests.push({
         updateTextStyle: {
-          range: { startIndex: start, endIndex: start + plainTextBefore.length },
+          range: { startIndex: start, endIndex: start + plainTextBefore.length, tabId: tabId },
           textStyle: { bold: false },
           fields: "bold"
         },
@@ -812,13 +814,13 @@ function createStyledTextRequests(text, baseIndex) {
     // 2. Chèn đoạn text cần in đậm
     const boldStart = baseIndex + currentOffset;
     requests.push({
-      insertText: { location: { index: boldStart }, text: boldText },
+      insertText: { location: { index: boldStart, tabId: tabId }, text: boldText },
     });
 
     // 3. Lệnh in đậm CHỈ cho đoạn boldText
     requests.push({
       updateTextStyle: {
-        range: { startIndex: boldStart, endIndex: boldStart + boldText.length },
+        range: { startIndex: boldStart, endIndex: boldStart + boldText.length, tabId: tabId },
         textStyle: { bold: true },
         fields: "bold"
       },
@@ -833,11 +835,11 @@ function createStyledTextRequests(text, baseIndex) {
   if (remainingText) {
     const finalStart = baseIndex + currentOffset;
     requests.push({
-      insertText: { location: { index: finalStart }, text: remainingText },
+      insertText: { location: { index: finalStart, tabId: tabId }, text: remainingText },
     });
     requests.push({
       updateTextStyle: {
-        range: { startIndex: finalStart, endIndex: finalStart + remainingText.length },
+        range: { startIndex: finalStart, endIndex: finalStart + remainingText.length, tabId: tabId },
         textStyle: { bold: false },
         fields: "bold"
       },
