@@ -25,6 +25,7 @@ const EXTENSION_SECRET_KEY = "SuperSecretKey_hongHa_321";
 const EMPTY_ANSWER = ["→ \n", "", "→"];
 const IS_CORRECT_ANSWER = "✅ Đúng";
 var lessons = [];
+let currentLesson;
 
 function handleAfterLogout() {
   statusDiv().innerText = PLEASE_LOGIN_MESSAGE;
@@ -69,8 +70,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     checkEnableProcessButton();
   });
 
-  lessonDropdown.addEventListener("change", () => {
+  lessonDropdown.addEventListener("change", async () => {
     checkEnableProcessButton();
+    const classId = classDropdown.value;
+    const lessonId = lessonDropdown.value;
+    const lessonName = getLessonName(lessonId);
+
+    if (!classId || !lessonId) return;
+
+    const confirmed = window.confirm(`Update current lesson as ${lessonName}?`);
+    if (!confirmed) {
+      lessonDropdown.value = currentLesson;
+      return;
+    };
+
+    await updateCurrentLessonForClass(classId, lessonId);
   });
 });
 
@@ -194,7 +208,7 @@ async function fetchLessons(classId) {
     lessons = await response.json();
     populateLessonDropdown(lessons);
 
-    const currentLesson = await fetchCurrentLesson(classId);
+    currentLesson = await fetchCurrentLesson(classId);
     if (currentLesson && lessons.some((lesson) => lesson.id === currentLesson)) {
       lessonDropdown.value = currentLesson;
     }
@@ -224,6 +238,32 @@ async function fetchCurrentLesson(classId) {
   } catch (error) {
     console.error("Error fetching current lesson:", error);
     return null;
+  }
+}
+
+async function updateCurrentLessonForClass(classId, lessonId) {
+  if (!classId || !lessonId) return false;
+  try {
+    const token = await ensureValidToken();
+    const response = await fetch(`${DOMAIN_BE}/classes/current-lesson`, {
+      method: "PATCH",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "x-api-key": EXTENSION_SECRET_KEY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ classId, currentLesson: lessonId }),
+    });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error("Failed to update current lesson:", response.status, errorBody);
+      return false;
+    }
+    currentLesson = lessonId;
+    return true;
+  } catch (error) {
+    console.error("Error updating current lesson:", error);
+    return false;
   }
 }
 
@@ -917,22 +957,26 @@ function setStyleForTeacherFeedBack(baseIndex, feedbackText, tabId) {
 
   return requests;
 }
+
 /**
  * Tách text theo format **bold** và tạo danh sách các request tương ứng.
- * Đảm bảo chỉ in đậm nội dung bên trong cặp dấu **.
+ * Đảm bảo chỉ in đậm nội dung bên trong cặp dấu **, tắt italic và underline.
  */
 function createStyledTextRequests(text, baseIndex, tabId) {
   const requests = [];
   const boldRegex = /\*\*(.*?)\*\*/g;
   let lastIndex = 0;
-  let match;
   let currentOffset = 0;
+
+  // Định nghĩa các fields cần can thiệp để reset định dạng
+  // Chúng ta không đưa 'foregroundColor' vào đây để nó tự kế thừa màu
+  const resetFields = "bold,italic,underline";
 
   while ((match = boldRegex.exec(text)) !== null) {
     const plainTextBefore = text.substring(lastIndex, match.index);
     const boldText = match[1];
 
-    // 1. Chèn đoạn text thường phía trước và đảm bảo KHÔNG in đậm
+    // 1. Chèn đoạn text thường phía trước (Reset Bold, Italic, Underline)
     if (plainTextBefore) {
       const start = baseIndex + currentOffset;
       requests.push({
@@ -941,8 +985,12 @@ function createStyledTextRequests(text, baseIndex, tabId) {
       requests.push({
         updateTextStyle: {
           range: { startIndex: start, endIndex: start + plainTextBefore.length, tabId: tabId },
-          textStyle: { bold: false },
-          fields: "bold"
+          textStyle: { 
+            bold: false,
+            italic: false,
+            underline: false 
+          },
+          fields: resetFields
         },
       });
       currentOffset += plainTextBefore.length;
@@ -954,12 +1002,16 @@ function createStyledTextRequests(text, baseIndex, tabId) {
       insertText: { location: { index: boldStart, tabId: tabId }, text: boldText },
     });
 
-    // 3. Lệnh in đậm CHỈ cho đoạn boldText
+    // 3. Lệnh định dạng cho đoạn boldText (Bold: true, Italic/Underline: false)
     requests.push({
       updateTextStyle: {
         range: { startIndex: boldStart, endIndex: boldStart + boldText.length, tabId: tabId },
-        textStyle: { bold: true },
-        fields: "bold"
+        textStyle: { 
+          bold: true,
+          italic: false,
+          underline: false 
+        },
+        fields: resetFields
       },
     });
 
@@ -967,7 +1019,7 @@ function createStyledTextRequests(text, baseIndex, tabId) {
     lastIndex = boldRegex.lastIndex;
   }
 
-  // 4. Chèn nốt phần text còn lại và RESET in đậm về false
+  // 4. Chèn nốt phần text còn lại (Reset Bold, Italic, Underline)
   const remainingText = text.substring(lastIndex);
   if (remainingText) {
     const finalStart = baseIndex + currentOffset;
@@ -977,8 +1029,12 @@ function createStyledTextRequests(text, baseIndex, tabId) {
     requests.push({
       updateTextStyle: {
         range: { startIndex: finalStart, endIndex: finalStart + remainingText.length, tabId: tabId },
-        textStyle: { bold: false },
-        fields: "bold"
+        textStyle: { 
+          bold: false,
+          italic: false,
+          underline: false 
+        },
+        fields: resetFields
       },
     });
   }
